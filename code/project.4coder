@@ -1,0 +1,44 @@
+version(1);
+
+project_name = "genesis";
+patterns = {
+"*.c",
+"*.cpp",
+"*.h",
+"*.bat",
+"*.sh",
+"*.txt",
+};
+load_paths = {
+    {
+        {
+            {
+                ".",
+            },
+            .relative = true,
+            .recursive = false,
+        },
+        .os = "default"
+    },
+};
+command_list = {
+    {
+        .name = "build",
+        .out = "*compilation*",
+        .footer_panel = true,
+        .save_dirty_files = true,
+        .cursor_at_end = false,
+        .cmd = {    
+                    {
+                        "build.bat",
+                        .os = "win"
+                    },
+                    {
+                        "sh build.sh",
+                        .os = "linux"
+                    },
+               },
+    },
+};
+
+fkey_command[1] = "build";

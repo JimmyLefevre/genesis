@@ -1,0 +1,97 @@
+
+//
+// CURRENT:
+//
+Profiler:
+- We probably want to make the profiler be the topmost layer when active.
+- Sort entries by cycles.
+- Store the last several frames.
+- Stop using globals.
+
+//
+// BUGS/IMPORTANT:
+//
+- DSound initialisation makes it tricky to play sound right after starting.
+
+//
+// CONTENT:
+//
+Game:
+- Walls that stop crosshairs.
+-   Some ideas:
+-     Absolute walls that come from the side of the screen and have a hole in them.
+-       Can we make this work with the player-controlled camera?
+-       Are enemies that have a specific attack range/angle (cf. TBoI Greed) a good enough replacement?
+-     Enemies with a weakspot, say in the back.
+- Try some interesting stuff with NPlayers/NPartners.
+-   Controls to rotate/spread out/gather crosshair formation?
+-   Sharing crosshairs across multiple players.
+- Wave spawn system:
+-   Log types and order of kills. (Basic version done!)
+-   Spawn enemies based on that.
+- Color the player/partner so that they correspond to anti-player/anti-partner colors.
+
+- After a level load, wait on updating the game until the player tries to act.
+- Properly telegraph enemy spawns.
+
+Controls:
+- Make a rebinding menu.
+-   That means we need something like get_name_for_button() to show what the current bindings are.
+
+//
+// ENGINE:
+//
+UI:
+- Automatic layouts for widget lists, etc.
+-   place_cursor, xstep, ystep, xmod, ymod, xstep_on_y_overflow, ystep_on_x_overflow?
+
+Profiling:
+- Debug timer UI.
+- Log max/average cycles spent in each block.
+- Compute both "total" and "self" times.
+
+Audio:
+- Allow sound cutoffs.
+- Music crossfading.
+
+Platform:
+- Handle GL extensions (not) being there:
+-   Close for missing pixel_format.
+-   Give vsync option when available.
+-   Enable sRGB when available; maybe use a fallback shader otherwise?
+-   ...or switch to D3D.
+- Get resolution options (GetDeviceCaps/EnumDisplaySettings/EnumDisplayMonitors, GetMonitorInfo).
+-   Actually, we should probably have a set of resolution options independent from the monitor's and
+-   only present the ones smaller than the monitor's current resolution, as in:
+-   v2s possible_resolutions[] = {{1280, 720}, {1920, 1080}, {3840, 2160}};
+
+Architecture:
+- 2 ways to consider framerate independence:
+-   Try to play catch-up based on previous frame timings, which is unreliable and stuttery.
+-   Assume we don't drop frames and aim to render at the exact frame boundary.
+-   Right now, we're doing the first of these two; perhaps we'd like to assume the vsync framerate up to a safety margin?
+- Dynamic rendering, etc. in order to always hit framerate.
+
+Rendering:
+- Instancing + vertex shader to make each quad a 4 vertex triangle strip.
+- Layers: Sort draw calls by layer, then shader, then texture or something like that.
+- Segregate GL code.
+
+//
+// RESOURCES:
+//
+Assets:
+- Level loading/unloading.
+- Level editor.
+- Language packs.
+-   Non-alphabet languages may use a combination of letters (for regular keys) and non-letters (for text and special keys like arrow keys, etc.).
+
+//
+// EXTRA:
+//
+Research:
+- Text supersampling: instead of having fully subpixel rasterisation, have 4 subpixel offsets in each direction and lerp between them.
+
+[X] Nolib:
+- Optionally load shlwapi(FilePathExistsW), winmm(timeBeginPeriod) at run-time and stop linking to them.
+- Note: The first of these functions should not be used by release anyway.
