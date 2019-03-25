@@ -357,9 +357,9 @@ static inline string file_extension(string filename) {
     return advance_to_after_last_occurrence(filename, '.');
 }
 
-static inline string push_string(Memory_Block *block, usize size) {
+static inline string push_string(Memory_Block *block, usize size, u32 align = 4) {
     string result;
-    result.data = push_array(block, u8, size);
+    result.data = push_array(block, u8, size, 1);
     result.length = size;
     return result;
 }
@@ -392,4 +392,17 @@ static inline string substring(string *from, usize start, usize end) {
     result.data = from->data + start;
     result.length = end - start;
     return result;
+}
+
+static bool append_string(string *s, string append, usize max_length) {
+    if((s->length + append.length + 1) < max_length) {
+        u8 *append_at = s->data + s->length;
+        mem_copy(append.data, append_at, append.length);
+        
+        s->length += append.length;
+        
+        return true;
+    } else {
+        return false;
+    }
 }

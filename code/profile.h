@@ -17,13 +17,14 @@ struct Debug_Timer {
 // Aligning to cache lines.
 #pragma pack(push, 1)
 struct Debug_Timer_Queue {
-    u8 padding[64 - sizeof(u32)];
-    u32 count;
+    u8 padding[64 - sizeof(s32)];
+    s32 count;
     Debug_Timer timers[DEBUG_TIMERS_PER_CPU];
 };
 #pragma pack(pop)
 
 struct Profiler {
+    Memory_Block log_block;
     Debug_Timer_Queue *timer_queues;
     s16 thread_count;
     s16 frame_index;
@@ -36,6 +37,8 @@ struct Profiler {
     f32 target_alpha;
     f32 current_alpha;
     f32 dalpha;
+    
+    f32 scroll;
 };
 
 static Profiler *global_profiler;

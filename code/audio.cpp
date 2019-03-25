@@ -1,12 +1,13 @@
 
-// This function does not return 0 for vol = 0.
+// This function does not have to return 0 for vol = 0.
 // Instead, silent sounds should be flagged.
 static inline f32 linear_to_exp(f32 vol) {
 #if 0
     return 0.001f * f_exp(6.90775527898213705205f * vol);
 #else
-    // @Cleanup: This curve is close enough to the Foobar volume control.
-    // Either go to this or find a louder exponential curve that resembles this one.
+    
+    // NOTE(keeba): While the curve above was supposed to be more accurate, it's too quiet.
+    // Meanwhile, this works on my current setup.
     return vol*vol;
 #endif
 }
@@ -133,7 +134,7 @@ static inline void compute_volumes_for_position(f32 *volume, s32 channel_count, 
 void Implicit_Context::mix_samples(const s16 *samples, const s32 pitched_sample_count, f32 sample_offset, const f32 pitch,
                                    f32 *pitched_samples, s32 write_offset,
                                    f32 *start_volumes, f32 *end_volumes, f32 **mix_channels, const u8 channel_count) {
-    // @Speed: Check if merging these two loops is better.
+    // Check if merging these two loops is better.
     // That is, compute the pitched sample and immediately write it out.
     //
     // On second thought, having this pre-pass means that pitched samples
@@ -157,7 +158,7 @@ void Implicit_Context::mix_samples(const s16 *samples, const s32 pitched_sample_
             const f32 end_volume = end_volumes[ichannel];
             const f32 dvolume = (end_volume - start_volume) / (f32)pitched_sample_count;
             
-#if 1
+#if 0
             // Legible version:
             for(s32 isample = 0; isample < pitched_sample_count; ++isample) {
                 const f32 tlerp = (f32)isample / (f32)pitched_sample_count;

@@ -2113,6 +2113,10 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     
 #if GENESIS_DEV
     profile_update(profiler, program_state, text_info, render_info, &profiler_input);
+    
+    if(profiler->has_focus) {
+        program_state->input = profiler_input;
+    }
 #endif
     
     ASSERT(sim_time <= cur_time);

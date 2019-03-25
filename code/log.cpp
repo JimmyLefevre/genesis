@@ -11,12 +11,17 @@ static void loglnprint(Log *log, string s) {
 }
 
 static void logprint(Log *log, string s) {
+#if 1
+    append_string(&log->temporary_buffer, s, log->temporary_buffer_size);
+#else
+    // @Cleanup: We need to figure out if this + 1 is meaningful before deleting this.
     if((log->temporary_buffer.length + s.length + 1) < log->temporary_buffer_size) {
         u8 *append_at = log->temporary_buffer.data + log->temporary_buffer.length;
         mem_copy(s.data, append_at, s.length);
         
         log->temporary_buffer.length += s.length;
     }
+#endif
 }
 
 static void logprint(Log *log, char *format, ...) {
