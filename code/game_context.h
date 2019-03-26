@@ -24,7 +24,6 @@ struct Implicit_Context {
     void draw_game(Rendering_Info *, Game *, Asset_Storage *);
     string tprint(char *, ...);
     void clone_game_state(Game *, Game *);
-    void profile_update(Profiler *, Program_State *, Text_Info *, Rendering_Info *, Input *);
     void mix_samples(const s16 *, const s32, f32, const f32, f32 *, s32, f32 *, f32 *, f32 **, const u8);
     void flush_rasters_to_atlas(Text_Info *, u8 *, u32 **, v2s16 *, v2 *, s16, s16 *, s16 *, s16 *, v2s16, f32, f32);
     void files_convert_wav_to_facs(string *, s32, Memory_Block *, string *);
@@ -33,6 +32,10 @@ struct Implicit_Context {
     void init_glyph_cache(Text_Info *);
     void draw_string_immediate(Text_Info *, Rendering_Info *, string, v2, f32, s8, bool, v4);
     void text_update(Text_Info *, Rendering_Info *);
+    
+#if GENESIS_DEV
+    void profile_update(Profiler *, Program_State *, Text_Info *, Rendering_Info *, Input *);
+#endif
 };
 
 #define CONTEXT_GAME_INIT_MEMORY(name) void (Implicit_Context::*name)(GAME_INIT_MEMORY_ARGS)

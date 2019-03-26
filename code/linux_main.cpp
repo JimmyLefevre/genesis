@@ -10,9 +10,12 @@
 // #include <x86intrin.h> // __rdtsc, might not need to include this after we include SIMD headers
 
 #include "basic.h"
-#include "print.cpp"
 
+#include "os_headers.h"
 #include "linux_syscall.h"
+#include "os_context.h"
+#include "interfaces.h"
+#include "os_code.cpp"
 
 //
 // System:
@@ -1055,9 +1058,6 @@ extern "C" {
     const char *snd_strerror(int error);
 }
 
-#include "events.h"
-#include "interfaces.h"
-
 /* References:
 The System V ABI manual from Intel details everything used
 here: program startup calling conventions and function calling
@@ -1252,7 +1252,7 @@ static void linux_end_sound_update(s16 *input_buffer, u32 samples_to_write) {
     snd_pcm_sframes_t written = snd_pcm_writei(alsa_handle, input_buffer, samples_to_write);
 }
 
-static void linux_unload_game_code(game_interface *g_interface) {
+static void linux_unload_game_code(Game_Interface *g_interface) {
     if(g_interface->os_handle) {
         dlclose(g_interface->os_handle);
         g_interface->run_frame = 0;
@@ -1289,7 +1289,7 @@ OS_READ_ENTIRE_FILE(linux_read_entire_file) {
     return result;
 }
 
-static game_interface linux_load_game_code(const char *built_dll_name, const char *loaded_dll_name) {
+static Game_Interface linux_load_game_code(const char *built_dll_name, const char *loaded_dll_name) {
     linux_unlink(loaded_dll_name);
     linux_rename(built_dll_name, loaded_dll_name);
     
@@ -1304,24 +1304,23 @@ static game_interface linux_load_game_code(const char *built_dll_name, const cha
     // Maybe we'd rather use RTLD_NOW here?
     void *dll_handle = dlopen(loaded_dll_name, RTLD_LAZY);
     if(dll_handle) {
-        game_get_api *get_api_proc = (game_get_api *)dlsym(dll_handle, "g_get_api");
+        game_get_api get_api_proc = (game_get_api)dlsym(dll_handle, "g_get_api");
         if(get_api_proc) {
             u32 i;
             // @Incomplete @Cleanup: Macro this out.
-            os_interface os_export;
-            os_export.get_seconds = linux_get_secs;
-            os_export.mem_alloc = linux_mem_alloc;
-            os_export.open_file = linux_open_file;
-            os_export.read_file = linux_read_file;
-            os_export.file_size = linux_file_size;
-            os_export.read_entire_file = linux_read_entire_file;
-            os_export.write_entire_file = linux_write_entire_file;
-            os_export.begin_sound_update = linux_begin_sound_update;
-            os_export.end_sound_update = linux_end_sound_update;
-            os_export.capture_cursor = linux_capture_cursor;
-            os_export.release_cursor = linux_release_cursor;
-            os_export.get_cursor_position_in_pixels = linux_get_cursor_position_in_pixels;
-            os_export.print = linux_print;
+            OS_Export os_export;
+            os_export.os.get_seconds = linux_get_secs;
+            os_export.os.mem_alloc = linux_mem_alloc;
+            os_export.os.open_file = linux_open_file;
+            os_export.os.read_file = linux_read_file;
+            os_export.os.file_size = linux_file_size;
+            os_export.os.read_entire_file = linux_read_entire_file;
+            os_export.os.write_entire_file = linux_write_entire_file;
+            os_export.os.begin_sound_update = linux_begin_sound_update;
+            os_export.os.end_sound_update = linux_end_sound_update;
+            os_export.os.capture_cursor = linux_capture_cursor;
+            os_export.os.release_cursor = linux_release_cursor;
+            os_export.os.print = linux_print;
             ASSERT(opengl_lib);
             for(i = 0; i < ARRAY_LENGTH(opengl_base_functions); ++i) {
                 os_export.opengl.base_functions[i] = (void *)dlsym(opengl_lib, opengl_base_functions[i]);
@@ -1330,7 +1329,7 @@ static game_interface linux_load_game_code(const char *built_dll_name, const cha
                 os_export.opengl.extended_functions[i] = (void *)glXGetProcAddressARB((const GLubyte *)opengl_extended_functions[i]);
             }
             
-            game_interface result = get_api_proc(&os_export);
+            Game_Interface result = get_api_proc(&os_export);
             result.os_handle = dll_handle;
             return result;
         } else {
@@ -1537,7 +1536,7 @@ int main(int argumentCount, char **arguments) {
             empty_cursor = XCreatePixmapCursor(display, empty_pixmap, empty_pixmap, &empty_color, &empty_color, 0, 0);
             
             // Game code loading init:
-            game_interface g_interface = {};
+            Game_Interface g_interface = {};
             if(linux_access(built_dll_full_path, X_OK) != 0) {
                 if(linux_access(loaded_dll_full_path, X_OK == 0)) {
                     linux_rename(loaded_dll_full_path, built_dll_full_path);
@@ -1548,9 +1547,9 @@ int main(int argumentCount, char **arguments) {
             // Memory:
             //
             
-            memory_block main_block;
-            memory_block game_block;
-            memory_block render_queue;
+            Memory_Block main_block;
+            Memory_Block game_block;
+            Memory_Block render_queue;
             
             main_block.size = GiB(2);
             main_block.mem = (u8 *)linux_mem_alloc(main_block.size);
@@ -1558,13 +1557,12 @@ int main(int argumentCount, char **arguments) {
             sub_block(&game_block, &main_block, GiB(1));
             sub_block(&render_queue, &main_block, MiB(512));
             
-            //
-            // Events:
-            //
-            event_queue events = {};
+            Program_State program_state = {};
+            
+            Implicit_Context main_context = {};
             
             g_interface = linux_load_game_code(built_dll_full_path, loaded_dll_full_path);
-            g_interface.init_mem(&game_block);
+            g_interface.init_mem(&main_context, &game_block, &program_state);
             f64 start_frame_time = linux_get_secs();
             
             // Main loop:
@@ -1667,7 +1665,7 @@ int main(int argumentCount, char **arguments) {
                     }
                 }
                 
-                g_interface.run_frame(&game_block, &events);
+                g_interface.run_frame(&main_context, &game_block, &program_state);
                 
                 s32 target_frame_ms = (should_render) ? 16 : 100;
                 f64 end_frame_time = linux_get_secs();

@@ -717,7 +717,7 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
     };
     
     { // Enforcing map bounds.
-        FORI(0, ARRAY_LENGTH(disk_entity_types_for_arrays)) {
+        FORI_TYPED(u32, 0, ARRAY_LENGTH(disk_entity_types_for_arrays)) {
             v2 *ps = disk_p_arrays[i];
             s32 count = disk_counts_for_arrays[i];
             f32 radius = disk_radii_for_arrays[i];
@@ -733,7 +733,7 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
             }
         }
         
-        FORI(0, ARRAY_LENGTH(obb_entity_types_for_arrays)) {
+        FORI_TYPED(u32, 0, ARRAY_LENGTH(obb_entity_types_for_arrays)) {
             v2 *ps = obb_p_arrays[i];
             s32 count = obb_counts_for_arrays[i];
             v2 halfdim = obb_halfdims_for_arrays[i];
@@ -777,7 +777,7 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
             bool hit_any = false;
             
             bullet_overlap_begin:
-            FORI(0, ARRAY_LENGTH(disk_entity_types_for_arrays)) {
+            FORI_TYPED(u32, 0, ARRAY_LENGTH(disk_entity_types_for_arrays)) {
                 v2 *typed_ps = disk_p_arrays[i];
                 const f32 typed_radius = disk_radii_for_arrays[i];
                 const u8 type = disk_entity_types_for_arrays[i];
@@ -801,7 +801,7 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
                 }
             }
             
-            FORI(0, ARRAY_LENGTH(obb_entity_types_for_arrays)) {
+            FORI_TYPED(u32, 0, ARRAY_LENGTH(obb_entity_types_for_arrays)) {
                 v2 *typed_ps = obb_p_arrays[i];
                 const v2 typed_halfdim = obb_halfdims_for_arrays[i];
                 const u8 type = obb_entity_types_for_arrays[i];
@@ -1413,6 +1413,7 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         audio_info->target_volume.by_category[AUDIO_CATEGORY_MUSIC] = audio_info->current_volume.by_category[AUDIO_CATEGORY_MUSIC];
     }
     
+#if GENESIS_DEV
     { // Profiler:
         Profiler profiler = {};
         
@@ -1424,6 +1425,7 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         global_profiler = &info->profiler;
 #endif
     }
+#endif
     
     { // Menu.
         Menu_Page *pages      = push_array(&menu->block, Menu_Page, 8);
@@ -1486,8 +1488,10 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
             
             add_label(labels, &label_count, ui_rect,
                       V2(0.50f, 0.85f + 0.1f * 0.5f + 0.02f), 0.03f, STRING("Godmode?"), FONT_REGULAR, true);
+#if GENESIS_DEV
             add_toggle(toggle_aabbs, toggles, &toggle_count, ui_rect,
                        V2(0.50f, 0.85f), V2(0.1f), &g_cl->g.godmode);
+#endif
             
             {
                 Dropdown *dropdown = add_dropdown(dropdown_aabbs, dropdowns, &dropdown_count, ui_rect,

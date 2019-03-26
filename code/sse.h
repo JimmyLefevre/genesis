@@ -1,5 +1,6 @@
 
-#include <intrin.h>
+// #include <intrin.h>
+#include <x86intrin.h>
 
 #if OS_WINDOWS
 #define WRITE_FENCE _WriteBarrier(); _mm_sfence()

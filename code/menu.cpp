@@ -93,17 +93,17 @@ static Toggle *add_toggle(rect2 *aabbs, Toggle *toggles, s32 *count, rect2 frame
 
 static Dropdown *add_dropdown(rect2 *aabbs, Dropdown *dropdowns, s32 *count, rect2 frame,
                               v2 p, v2 dim, s32 option_count, any32 *actual,
-                              s32 default, Memory_Block *block) {
+                              s32 _default, Memory_Block *block) {
     ASSERT((s8)option_count == option_count);
-    ASSERT((s8)     default ==      default);
-    ASSERT(default < option_count);
+    ASSERT((s8)     _default ==      _default);
+    ASSERT(_default < option_count);
     rect2 aabb = framed_rect_pdim(p, dim, frame);
     
     Dropdown dropdown;
     dropdown.options = push_array(block, Dropdown_Option, option_count);
     dropdown.actual = actual;
     dropdown.option_count = (s8)option_count;
-    dropdown.active = (s8)default;
+    dropdown.active = (s8)_default;
     dropdown.hover = -1;
     
     if(dropdown.actual) {

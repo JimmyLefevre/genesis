@@ -150,7 +150,7 @@ static void maybe_update_best_match(u8 **match_string_hash, u32 *match_string_ch
             ssize this_match_offset = at - this_match;
             
             if(this_match_offset > 0) {
-                usize this_match_length = string_match_length_upto(at, this_match, bytes_left);
+                ssize this_match_length = string_match_length_upto(at, this_match, bytes_left);
                 ASSERT(this_match_length <= S32_MAX);
                 
                 s32 this_min_match_length = MIN_MATCH_LENGTH;
@@ -259,13 +259,13 @@ static string fastcomp_compress(string source, Memory_Block *work_memory) {
     while(bytes_parsed < source.length) {
         u8 *block_data = source.data + bytes_parsed;
         s32 block_length = PARSE_BLOCK_LENGTH;
-        usize bytes_left = source.length - bytes_parsed;
+        ssize bytes_left = source.length - bytes_parsed;
         if(bytes_left < block_length) {
             block_length = (s32)bytes_left;
         }
         
         { // Match finding:
-            for(usize ibyte_in_parse_block = 0; ibyte_in_parse_block < block_length; ++ibyte_in_parse_block) {
+            for(ssize ibyte_in_parse_block = 0; ibyte_in_parse_block < block_length; ++ibyte_in_parse_block) {
                 u8 *at = block_data + ibyte_in_parse_block;
                 usize out_array_index = ibyte_in_parse_block * MAX_MATCH_COUNT;
                 usize block_bytes_left = block_length - 1 - ibyte_in_parse_block;
@@ -479,7 +479,8 @@ static void fastcomp_decompress(u8 *source, const usize length, u8 *out) {
         }
         
         for(s32 i = 0; i < match_length; ++i) {
-            *out++ = out[-match_offset];
+            *out = out[-match_offset];
+            out += 1;
         }
     }
 }

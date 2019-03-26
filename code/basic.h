@@ -184,19 +184,19 @@ typedef          s32  ptrdiff_t;
 }
 
 extern "C" {
-    void *memset(void *mem, int value, size_t size);
-    void *memcpy(void *to, const void *from, size_t size);
-    int memcmp(const void *a, const void *b, size_t size);
+    void *memset(void *mem, int value, usize size);
+    void *memcpy(void *to, const void *from, usize size);
+    int memcmp(const void *a, const void *b, usize size);
     
 #if OS_WINDOWS
 #pragma function(memset)
 #endif
-    void *memset(void *mem, int value, size_t size) {
-        size_t u64_count = size / 8;
-        size_t bytes_left = size % 8;
+    void *memset(void *mem, int value, usize size) {
+        usize u64_count = size / 8;
+        usize bytes_left = size % 8;
         long long value64 = ((long long)value << 32) | (long long)value;
         long long *m64 = (long long *)mem;
-        size_t i;
+        usize i;
         
         for(i = 0; i < u64_count; ++i) {
             *m64++ = value64;
@@ -211,14 +211,14 @@ extern "C" {
 #if OS_WINDOWS
 #pragma function(memcpy)
 #endif
-    void *memcpy(void *to, const void *from, size_t size) {
-        size_t u64_count = size / 8;
-        size_t bytes_left = size % 8;
+    void *memcpy(void *to, const void *from, usize size) {
+        usize u64_count = size / 8;
+        usize bytes_left = size % 8;
         unsigned long long *f64 = (unsigned long long *)from;
         unsigned long long *t64 = (unsigned long long *)to;
         unsigned char *f8 = (unsigned char *)(f64 + u64_count);
         unsigned char *t8 = (unsigned char *)(t64 + u64_count);
-        size_t i;
+        usize i;
         
         for(i = 0; i < u64_count; ++i) {
             t64[i] = f64[i];
@@ -232,11 +232,11 @@ extern "C" {
 #if OS_WINDOWS
 #pragma function(memcmp)
 #endif
-    int memcmp(const void *a, const void *b, size_t size) {
+    int memcmp(const void *a, const void *b, usize size) {
         unsigned char *at_a = (unsigned char *)a;
         unsigned char *at_b = (unsigned char *)b;
         
-        for(size_t i = 0; i < size; ++i) {
+        for(usize i = 0; i < size; ++i) {
             if(at_a[i] == at_b[i]) {
                 continue;
             }
