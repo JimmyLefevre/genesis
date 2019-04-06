@@ -6,8 +6,10 @@
 #define AUDIO_BUFFER_SIZE 44100
 
 enum Sound_Uid {
+    SOUND_UID_unloaded = 0,
+    
     // Music
-    SOUND_UID_danse_macabre = 0,
+    SOUND_UID_danse_macabre,
     
     // Sounds
     SOUND_UID_erase,

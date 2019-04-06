@@ -359,7 +359,7 @@ static inline string file_extension(string filename) {
 
 static inline string push_string(Memory_Block *block, usize size, u32 align = 4) {
     string result;
-    result.data = push_array(block, u8, size, 1);
+    result.data = push_array(block, u8, size, align);
     result.length = size;
     return result;
 }

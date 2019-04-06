@@ -29,6 +29,7 @@ static void load_sound_info(Loaded_Sound *loaded, Asset_Location *location, FACS
 }
 
 static s16 _load_music(Audio_Info *audio, Datapack_Handle *pack, u32 asset_uid, u32 sound_uid) {
+    ASSERT(sound_uid != SOUND_UID_unloaded);
     Asset_Location location = get_asset_location(pack, asset_uid);
     
     FACS_Header header;
@@ -64,6 +65,7 @@ static v2 position_for_channel(s32 channel, s32 sound_channel_count, s32 output_
 }
 
 static s16 _load_sound(Audio_Info *audio, Datapack_Handle *pack, u32 asset_uid, u32 sound_uid) {
+    ASSERT(sound_uid != SOUND_UID_unloaded);
     Asset_Location location = get_asset_location(pack, asset_uid);
     
     FACS_Header header;
@@ -90,26 +92,30 @@ static inline s16 _find_sound_id(Audio_Info *audio, u32 sound_uid) {
 
 
 static void play_sound(Audio_Info *audio, s16 loaded_id, v2 position, s32 channel_index = 0) {
-    Loaded_Sound *loaded = audio->loads.items + loaded_id;
-    Playing_Sound *sound = reserve(&audio->sounds, 1);
-    
-    sound->cursor.pitch = 1.0f;
-    sound->loaded = loaded_id;
-    sound->next_chunk_to_load = 0;
-    sound->chunk_count = loaded->chunk_count;
-    sound->position = position;
-    // @Temporary: Update this separately.
-    sound->new_position = position;
-    sound->channel_index = (u8)channel_index;
-    sound->silent = false;
-    sound->category = loaded->category;
-    ASSERT(sound->current_samples);
-    ASSERT(sound->next_samples);
-    ASSERT(sound->current_samples != sound->next_samples);
-    
-    load_chunk(loaded->streaming_data, sound->current_samples, sound->next_chunk_to_load++, loaded->channel_count, sound->channel_index);
-    if(sound->next_chunk_to_load < sound->chunk_count) {
-        load_chunk(loaded->streaming_data, sound->next_samples, sound->next_chunk_to_load++, loaded->channel_count, sound->channel_index);
+    if(loaded_id != -1) {
+        Loaded_Sound *loaded = audio->loads.items + loaded_id;
+        Playing_Sound *sound = reserve(&audio->sounds, 1);
+        
+        sound->cursor.pitch = 1.0f;
+        sound->loaded = loaded_id;
+        sound->next_chunk_to_load = 0;
+        sound->chunk_count = loaded->chunk_count;
+        sound->position = position;
+        // @Temporary: Update this separately.
+        sound->new_position = position;
+        sound->channel_index = (u8)channel_index;
+        sound->silent = false;
+        sound->category = loaded->category;
+        ASSERT(sound->current_samples);
+        ASSERT(sound->next_samples);
+        ASSERT(sound->current_samples != sound->next_samples);
+        
+        // @Speed: Right now, we're reading from disk for every sound.
+        // We may want to make a chunk cache in order to avoid doing so.
+        load_chunk(loaded->streaming_data, sound->current_samples, sound->next_chunk_to_load++, loaded->channel_count, sound->channel_index);
+        if(sound->next_chunk_to_load < sound->chunk_count) {
+            load_chunk(loaded->streaming_data, sound->next_samples, sound->next_chunk_to_load++, loaded->channel_count, sound->channel_index);
+        }
     }
 }
 
@@ -273,7 +279,9 @@ s16 *Implicit_Context::update_audio(Audio_Info *audio, const s32 samples_to_play
             end_volume  [channel] *= global_volume;
         }
         
-        bool should_silence_this_frame = it->silent;
+        // @Note: This (!global_volume) is incorrect if we change to a volume function
+        // that doesn't get to zero.
+        bool should_silence_this_frame = (!global_volume) || it->silent;
         bool should_silence_next_frame = true;
         for(s32 channel = 0; channel < channel_count; ++channel) {
             // Should we use a threshold here?

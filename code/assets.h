@@ -16,6 +16,9 @@ enum Asset_UID {
     // Texture atlases
     ASSET_UID_test_ta,
     
+    // Levels
+    ASSET_UID_1_lvl,
+    
     ASSET_UID_COUNT,
 };
 

@@ -393,6 +393,37 @@ static v2 closest_in_array_with_direction(v2 from, v2 *array, s32 count, f32 *ou
     return result;
 }
 
+#if 0
+struct Game_Level {
+    s32 index;
+    
+    v2 map_halfdim;
+    // Some list of associated assets.
+    
+    Any_Entity_Array entities[];
+    // ie.
+    s16 entity_type;
+    s16 entity_count;
+    // with type-specific fields right after this; SOA format?
+    // Entities can/should be serialised, ie.
+    
+    struct {
+        s32   count;
+        // v2    camera_ps        [     MAX_PLAYER_COUNT];
+        // f32   camera_zooms     [     MAX_PLAYER_COUNT];
+        // v2    dps              [     MAX_PLAYER_COUNT];
+        v2    ps               [     MAX_PLAYER_COUNT];
+        // v2    xhair_offsets    [     MAX_PLAYER_COUNT];
+        s32   partner_counts   [     MAX_PLAYER_COUNT];
+        s32   partners         [     MAX_PLAYER_COUNT][MAX_PARTNERS_PER_PLAYER];
+    } players;
+};
+#endif
+
+static usize layout_serialised_level_data(Serialised_Level_Data *level, Level_Header *header) {
+    return 0;
+}
+
 void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
                                      Audio_Info *audio, Datapack_Handle *datapack) {
     TIME_BLOCK;
@@ -408,26 +439,25 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
     }
 #endif
     
-    if(g->lost || !g->current_level_index) {
-        bool fresh_level = !g->current_level_index;
+    if((g->lost || !g->current_level_index) && datapack) {
+#if 0
+        u32 new_level_index = 1;
+        bool fresh_level = g->current_level_index != new_level_index;
         
         *g = {};
         g->lost = false;
         
         // Level load:
-        g->current_level_index = 1;
+        g->current_level_index = new_level_index;
+        g->camera_zoom = 1.0f;
         
         g->players.count = 1;
-        g->players.camera_zooms  [0] = 1.0f;
-        g->players.partner_counts[0] = 1;
-        g->players.partners[0][1] = 1;
-        g->players.partners[0][2] = 2;
-        g->players.partners[0][3] = 3;
         
-        g->partners.count = 1;
-        g->partners.offsets[1] = V2(-1.0f,  0.0f);
-        g->partners.offsets[2] = V2( 0.0f, -1.0f);
-        g->partners.offsets[3] = V2( 1.0f,  0.0f);
+        g->partners.count = 4;
+        g->partners.offsets[0] = V2(0.0f, 1.0f);
+        g->partners.offsets[1] = V2(-1.0f, 0.0f);
+        g->partners.offsets[2] = V2(0.0f, -1.0f);
+        g->partners.offsets[3] = V2(1.0f, 0.0f);
         
         g->trees.count = 3;
         g->trees.ps[0] = V2(-1.0f);
@@ -458,6 +488,76 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
             // @Incomplete: Clear all sounds?
             LOAD_SOUND(audio, datapack, erase);
         }
+#else
+        s32 desired_level = 1; //g->desired_level_index;
+        *g = {}; // @Cleanup @Speed
+        
+        g->desired_level_index = desired_level;
+        
+        g->camera_zoom = 1.0f;
+        
+        // @Incomplete: get_level(&temporary_memory, datapack, desired_level)
+        string asset = read_entire_asset(&temporary_memory, datapack, ASSET_UID_1_lvl);
+        Serialised_Level_Data serialised;
+        
+        serialised.header = (Level_Header *)asset.data;
+        serialised.player_ps = (v2 *)(serialised.header + 1);
+        serialised.partner_offsets = (v2 *)(serialised.player_ps + serialised.header->player_count);
+        serialised.turret_ps = (v2 *)(serialised.partner_offsets + serialised.header->partner_count);
+        serialised.turret_cooldowns = (f32 *)(serialised.turret_ps + serialised.header->turret_count);
+        serialised.dog_ps = (v2 *)(serialised.turret_cooldowns + serialised.header->turret_count);
+        serialised.wall_turret_ps = (v2 *)(serialised.dog_ps + serialised.header->dog_count);
+        serialised.target_ps = (v2 *)(serialised.wall_turret_ps + serialised.header->wall_turret_count);
+        
+        ASSERT(serialised.header->version == 1);
+        
+        g->current_level_index = serialised.header->index;
+        g->map_halfdim = serialised.header->map_halfdim;
+        {
+            s32 count = serialised.header->player_count;
+            FORI(0, count) {
+                g->players.ps[i] = serialised.player_ps[i];
+            }
+            g->players.count = count;
+        }
+        {
+            s32 count = serialised.header->partner_count;
+            FORI(0, count) {
+                g->partners.offsets[i] = serialised.partner_offsets[i];
+            }
+            g->partners.count = count;
+        }
+        {
+            s32 count = serialised.header->turret_count;
+            FORI(0, count) {
+                g->turrets.ps[i] = serialised.turret_ps[i];
+                g->turrets.cooldowns[i] = serialised.turret_cooldowns[i];
+            }
+            g->turrets.count = count;
+        }
+        {
+            s32 count = serialised.header->dog_count;
+            FORI(0, count) {
+                g->dogs.ps[i] = serialised.dog_ps[i];
+            }
+            g->dogs.count = count;
+        }
+        {
+            s32 count = serialised.header->wall_turret_count;
+            FORI(0, count) {
+                g->wall_turrets.ps[i] = serialised.wall_turret_ps[i];
+            }
+            g->wall_turrets.count = count;
+        }
+        {
+            s32 count = serialised.header->target_count;
+            FORI(0, count) {
+                g->targets.ps[i] = serialised.target_ps[i];
+            }
+            g->targets.count = count;
+        }
+        
+#endif
     }
     
     //
@@ -481,26 +581,28 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
     //
     
     { // Player controls.
+        {
+            f32 camera_zoom = g->camera_zoom;
+            if(BUTTON_DOWN(in, slot1)) {
+                camera_zoom = 1.0f;
+            } else if(BUTTON_DOWN(in, slot2)) {
+                camera_zoom = 0.5f;
+            } else if(BUTTON_DOWN(in, slot3)) {
+                camera_zoom = 2.0f;
+            } else if(BUTTON_DOWN(in, slot4)) {
+                camera_zoom = 1.0f;
+            }
+            
+            g->camera_zoom = camera_zoom;
+            g->xhair_offset = unit_scale_to_world_space_offset(in.xhairp, camera_zoom);
+        }
+        
+        // @Incomplete: Choose between xhair_offset and xhair_position to resolve multi-player
+        // aiming.
+        const v2 xhair_offset = g->xhair_offset;
         const s32 count = g->players.count;
         for(s32 iplayer = 0; iplayer < count; ++iplayer) {
             v2 p = g->players.ps[iplayer];
-            
-            { // Camera.
-                f32 camera_zoom = g->players.camera_zooms[iplayer];
-                
-                if(BUTTON_DOWN(in, slot1)) {
-                    camera_zoom = 1.0f;
-                } else if(BUTTON_DOWN(in, slot2)) {
-                    camera_zoom = 0.5f;
-                } else if(BUTTON_DOWN(in, slot3)) {
-                    camera_zoom = 2.0f;
-                } else if(BUTTON_DOWN(in, slot4)) {
-                    camera_zoom = 1.0f;
-                }
-                
-                g->players.camera_zooms[iplayer] = camera_zoom;
-                g->players.xhair_offsets[iplayer] = unit_scale_to_world_space_offset(in.xhairp, camera_zoom);
-            }
             
             { // Movement.
                 v2 dp = g->players.dps[iplayer];
@@ -516,13 +618,9 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
             { // Action.
                 if(BUTTON_PRESSED(&in, attack)) {
                     const f32 spawn_dist = (BULLET_RADIUS + PLAYER_HALFHEIGHT + PROJECTILE_SPAWN_DIST_EPSILON);
-                    const v2 xhair_offset = g->players.xhair_offsets[iplayer];
                     
-                    FORI_NAMED(_partner, 0, g->players.partner_counts[iplayer]) {
-                        // Since we want to use the newest crosshair position for aiming,
-                        // we have to manually get partner offsets here.
-                        s32 partner = g->players.partners[iplayer][_partner];
-                        v2 partner_offset = g->partners.offsets[partner];
+                    FORI_NAMED(_partner, 0, g->partners.count) {
+                        v2 partner_offset = g->partners.offsets[_partner];
                         v2 dir = v2_normalize(xhair_offset + partner_offset);
                         
                         v2 spawn_offset = dir * spawn_dist;
@@ -759,10 +857,11 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
         // The partner P is a direct snap.
         // However, we wait until after the collision resolve to do it because we want to make sure the position
         // is correct, which it wouldn't be if we snapped and the player ended up hitting a wall and getting nudged out of it.
+        v2 player_p = g->players.ps[g->current_player];
+        v2 xhair_offset = g->xhair_offset;
+        v2 xhair_p = xhair_offset + player_p;
         FORI(0, g->partners.count) {
-            s32 player = g->partners.players[i];
-            
-            g->partners.ps[i] = g->players.ps[player] + g->players.xhair_offsets[player] + g->partners.offsets[i];
+            g->partners.ps[i] = xhair_p + g->partners.offsets[i];
         }
     }
     
@@ -934,6 +1033,10 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
         g->removals.count = 0;
     }
     
+    if(!g->targets.count) {
+        g->desired_level_index += 1;
+    }
+    
     //
     // Frame end
     //
@@ -947,7 +1050,7 @@ void Implicit_Context::draw_game(Rendering_Info *render_info, Game *g, Asset_Sto
         const u32 focused_player = g->current_player;
         const v2 camera_p = g->players.ps[focused_player];
         v2 camera_dir = V2(1.0f, 0.0f);
-        const f32 camera_zoom = g->players.camera_zooms[focused_player];
+        const f32 camera_zoom = g->camera_zoom;
         const v2 viewport_halfdim = V2(GAME_ASPECT_RATIO_X, GAME_ASPECT_RATIO_Y) * camera_zoom * 0.5f;
         const v2 map_halfdim = g->map_halfdim;
         const v2 map_dim = map_halfdim * 2.0f;
@@ -1377,7 +1480,7 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
                 program_state->input_settings.mouse_sensitivity = 0.001f;
             }
             
-            { // Audio.
+            { // Audio config.
                 audio_info->current_volume.master                            = 0.5f;
                 audio_info->current_volume.by_category[AUDIO_CATEGORY_SFX  ] = 1.0f;
                 audio_info->current_volume.by_category[AUDIO_CATEGORY_MUSIC] = 1.0f;
@@ -1411,6 +1514,11 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         audio_info->target_volume.master                            = audio_info->current_volume.master;
         audio_info->target_volume.by_category[AUDIO_CATEGORY_SFX  ] = audio_info->current_volume.by_category[AUDIO_CATEGORY_SFX  ];
         audio_info->target_volume.by_category[AUDIO_CATEGORY_MUSIC] = audio_info->current_volume.by_category[AUDIO_CATEGORY_MUSIC];
+        
+        // When we get to unloading sounds, be sure to reset these values to -1.
+        FORI(0, SOUND_UID_COUNT) {
+            audio_info->sounds_by_uid[i] = -1;
+        }
     }
     
 #if GENESIS_DEV
@@ -1810,6 +1918,125 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
             }
             string ta = files_convert_bmp_to_ta(bmp_names, bmp_halfdims, bmp_offsets, bmp_count, game_block);
             data_files[data_file_count++] = ta;
+        }
+        
+        { // Levels
+            { // 1
+                usize allocated_size = KiB(4);
+                string output = push_string(game_block, allocated_size);
+                
+                v2 map_halfdim = V2(TEST_MAP_WIDTH, TEST_MAP_HEIGHT);
+                
+                const s32 player_count = 1;
+                
+                v2 player_ps[player_count] = {
+                    V2(),
+                };
+                s32 player_partner_counts[player_count] = {
+                    3,
+                };
+                
+                const s32 partner_count = 4;
+                
+                s32 player_partners[player_count][partner_count] = {
+                    {
+                        0, 1, 2, 3,
+                    },
+                };
+                v2 partner_offsets[partner_count] = {
+                    V2(-1.0f, 0.0f),
+                    V2(0.0f, -1.0f),
+                    V2(1.0f, 0.0f),
+                    V2(0.0f, 1.0f),
+                };
+                
+                const s32 turret_count = 1;
+                
+                v2 turret_ps[turret_count] = {
+                    V2(0.0f, 2.0f),
+                };
+                f32 turret_cooldowns[turret_count] = {
+                    1.0f,
+                };
+                
+                
+                const s32 dog_count = 1;
+                
+                v2 dog_ps[dog_count] = {
+                    V2(2.0f),
+                };
+                
+                const s32 wall_turret_count = 1;
+                
+                v2 wall_turret_ps[wall_turret_count] = {
+                    V2(-1.0f),
+                };
+                
+                /* @Cleanup: Do we care about trees?
+                const s32 tree_count = 1;
+                
+                v2 
+                */
+                
+                const s32 target_count = 1;
+                
+                v2 target_ps[target_count] = {
+                    V2(-3.0f, 2.2f),
+                };
+                
+                Serialised_Level_Data level;
+                
+                // @Cleanup: Use layout_serialised_level_data()
+                
+                level.header = (Level_Header *)output.data;
+                
+                level.player_ps = (v2 *)(level.header + 1);
+                level.partner_offsets = (v2 *)(level.player_ps + player_count);
+                level.turret_ps = (v2 *)(level.partner_offsets + partner_count);
+                level.turret_cooldowns = (f32 *)(level.turret_ps + turret_count);
+                level.dog_ps = (v2 *)(level.turret_cooldowns + turret_count);
+                level.wall_turret_ps = (v2 *)(level.dog_ps + dog_count);
+                // @Cleanup: Do we care about trees?
+                level.target_ps = (v2 *)(level.wall_turret_ps + wall_turret_count);
+                
+                u8 *end_of_file = (u8 *)(level.target_ps + target_count);
+                usize file_size = end_of_file - output.data;
+                ASSERT(file_size < allocated_size);
+                
+                level.header->version = 1;
+                level.header->index = 1;
+                level.header->map_halfdim = map_halfdim;
+                level.header->player_count = player_count;
+                level.header->partner_count = partner_count;
+                level.header->turret_count = turret_count;
+                level.header->dog_count = dog_count;
+                level.header->wall_turret_count = wall_turret_count;
+                level.header->target_count = target_count;
+                
+                for(s32 i = 0; i < player_count; ++i) {
+                    s32 this_partner_count = player_partner_counts[i];
+                    
+                    level.player_ps[i] = player_ps[i];
+                }
+                for(s32 i = 0; i < partner_count; ++i) {
+                    level.partner_offsets[i] = partner_offsets[i];
+                }
+                for(s32 i = 0; i < turret_count; ++i) {
+                    level.turret_ps[i] = turret_ps[i];
+                    level.turret_cooldowns[i] = turret_cooldowns[i];
+                }
+                for(s32 i = 0; i < dog_count; ++i) {
+                    level.dog_ps[i] = dog_ps[i];
+                }
+                FORI(0, wall_turret_count) {
+                    level.wall_turret_ps[i] = wall_turret_ps[i];
+                }
+                for(s32 i = 0; i < target_count; ++i) {
+                    level.target_ps[i] = target_ps[i];
+                }
+                
+                data_files[data_file_count++] = output;
+            }
         }
         
         { // Writing a datapack:

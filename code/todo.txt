@@ -2,11 +2,10 @@
 //
 // CURRENT:
 //
-Profiler:
-- We probably want to make the profiler be the topmost layer when active.
-- Sort entries by cycles.
-- Store the last several frames.
-- Stop using globals.
+Start managing assets:
+- The audio system needs to know about which music is currently playing for cross-fading.
+- We need to change the currently-playing music when loading a new level.
+
 
 //
 // BUGS/IMPORTANT:

@@ -1,4 +1,6 @@
 
+#define LEVEL_FORMAT_VERSION 1
+
 // @Hardcoded
 #define MAX_PLAYER_COUNT 4
 #define MAX_PARTNERS_PER_PLAYER 4
@@ -18,6 +20,7 @@
 #define DOG_RADIUS                0.15f
 #define WALL_TURRET_HALFWIDTH     0.10f
 #define WALL_TURRET_HALFHEIGHT    0.10f
+#define TARGET_RADIUS 0.15f
 
 #define PROJECTILE_SPAWN_DIST_EPSILON 0.1f
 
@@ -39,38 +42,39 @@ enum Entity_Type {
     ENTITY_TYPE_DOG,
     ENTITY_TYPE_WALL_TURRET,
     ENTITY_TYPE_TREE,
+    ENTITY_TYPE_TARGET,
     
     ENTITY_TYPE_COUNT,
 };
 
 struct Game {
     // Metagame:
-    u32 current_level_index;
+    u32 current_level_index; // Serialised
+    u32 desired_level_index;
     
-    s32   current_player;
+    v2 xhair_offset; // Immediate
+    v2 camera_p; // Immediate
+    f32 camera_zoom; // Immediate
+    
+    s32 current_player;
     struct {
-        s32   count;
+        s32   count; // Serialised
         v2    camera_ps        [     MAX_PLAYER_COUNT]; // Immediate
-        f32   camera_zooms     [     MAX_PLAYER_COUNT];
         v2    dps              [     MAX_PLAYER_COUNT];
-        v2    ps               [     MAX_PLAYER_COUNT];
-        v2    xhair_offsets    [     MAX_PLAYER_COUNT]; // Immediate
-        s32   partner_counts   [     MAX_PLAYER_COUNT];
-        s32   partners         [     MAX_PLAYER_COUNT][MAX_PARTNERS_PER_PLAYER];
+        v2    ps               [     MAX_PLAYER_COUNT]; // Serialised
     } players;
     
     // Collapse this into a player field?
     struct {
-        s32 count;
-        v2  ps                [    MAX_PARTNER_COUNT]; // Immediate
-        v2  offsets           [    MAX_PARTNER_COUNT];
-        s32 players           [    MAX_PARTNER_COUNT];
+        s32 count; // Serialised
+        v2 offsets[MAX_PARTNER_COUNT]; // Serialised
+        v2 ps[MAX_PARTNER_COUNT]; // Immediate
     } partners;
     
     struct {
-        s32 count;
-        v2  ps                 [MAX_LIVE_ENTITY_COUNT];
-        f32 cooldowns          [MAX_LIVE_ENTITY_COUNT];
+        s32 count; // Serialised
+        v2  ps                 [MAX_LIVE_ENTITY_COUNT]; // Serialised
+        f32 cooldowns          [MAX_LIVE_ENTITY_COUNT]; // Serialised
     } turrets;
     
     struct {
@@ -82,20 +86,25 @@ struct Game {
     } bullets;
     
     struct {
-        s32 count;
-        v2  ps                    [MAX_LIVE_ENTITY_COUNT];
+        s32 count; // Serialised
+        v2  ps                    [MAX_LIVE_ENTITY_COUNT]; // Serialised
         v2  dps                   [MAX_LIVE_ENTITY_COUNT];
     } dogs;
     
     struct {
-        s32 count;
-        v2  ps            [MAX_LIVE_ENTITY_COUNT];
+        s32 count; // Serialised
+        v2  ps            [MAX_LIVE_ENTITY_COUNT]; // Serialised
     } wall_turrets;
     
     struct {
         s32 count;
         v2  ps                   [MAX_LIVE_ENTITY_COUNT];
     } trees;
+    
+    struct {
+        s32 count; // Serialised
+        v2 ps                    [MAX_LIVE_ENTITY_COUNT]; // Serialised
+    } targets;
     
     bool lost;
     
@@ -111,10 +120,7 @@ struct Game {
     } logged_removals;
     
     // Map:
-    v2 map_halfdim;
-    
-    // @Temporary
-    s16 shoot_sound;
+    v2 map_halfdim; // Serialised
     
 #if GENESIS_DEV
     // Developer:
@@ -163,4 +169,34 @@ struct User_Config {
     Input_Settings input;
     Audio_Volumes volume;
 };
+struct Level_Header {
+    s32 version; // @Compression: Move the version to a level set.
+    s32 index; // @Compression: These will be implicit within a level set.
+    
+    // Level data @Incomplete
+    v2 map_halfdim;
+    
+    // u32 music_uid; TODO
+    
+    // maybe terrain-specific graphics?
+    
+    s32 player_count;
+    s32 partner_count;
+    s32 turret_count;
+    s32 dog_count;
+    s32 wall_turret_count;
+    s32 target_count;
+};
 #pragma pack(pop)
+
+struct Serialised_Level_Data {
+    Level_Header *header;
+    
+    v2 *player_ps;
+    v2 *partner_offsets;
+    v2 *turret_ps;
+    f32 *turret_cooldowns;
+    v2 *dog_ps;
+    v2 *wall_turret_ps;
+    v2 *target_ps;
+};

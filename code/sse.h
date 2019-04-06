@@ -1,6 +1,11 @@
 
-// #include <intrin.h>
+#if OS_WINDOWS
+#include <intrin.h>
+#elif OS_LINUX
 #include <x86intrin.h>
+#else
+#error Unrecognised OS.
+#endif
 
 #if OS_WINDOWS
 #define WRITE_FENCE _WriteBarrier(); _mm_sfence()

@@ -11,6 +11,7 @@
 #define LINE_VAR(name) PASTE(name, __LINE__)
 #define SWAP(a, b) {auto LINE_VAR(swap) = a; a = b; b = LINE_VAR(swap);}
 #define ALIGN_POW2(val, pow2) ((val) + ((pow2) - 1) & ((pow2) - 1))
+#define WRITE_AND_ADVANCE_u8PTR(ptr, type, value) {*((type *)ptr) = value; ptr += sizeof(type);}
 
 #if GENESIS_DEV
 #define ASSERT(expression) if(!(expression)){*(int *)0 = 0;}

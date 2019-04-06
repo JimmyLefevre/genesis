@@ -38,3 +38,11 @@ static Sound_Asset load_wav(string name) {
     
     return result;
 }
+
+static inline string read_entire_asset(Memory_Block *block, Datapack_Handle *pack, s32 asset_uid) {
+    Asset_Metadata metadata = get_asset_metadata(pack, asset_uid);
+    string result = push_string(block, metadata.size);
+    os_platform.read_file(pack->file_handle, result.data, metadata.location.offset, result.length);
+    
+    return result;
+}
