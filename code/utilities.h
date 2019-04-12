@@ -158,6 +158,24 @@ inline void f32_dumb_sort_ascending(f32 *values, const u32 count) {
     }
 }
 
+inline void s16_dumb_sort_descending(s16 *values, const u32 count) {
+    for(u32 j = 0; j < count; ++j) {
+        s16 highest = values[j];
+        u32 ihighest = j;
+        
+        for(u32 i = j + 1; i < count; ++i) {
+            s16 value = values[i];
+            if(value > highest) {
+                highest = value;
+                ihighest = i;
+            }
+        }
+        
+        values[ihighest] = values[j];
+        values[j] = highest;
+    }
+}
+
 inline void s16_dumb_sort_ascending(s16 *values, const u32 count) {
     for(u32 j = 0; j < count; ++j) {
         s16 lowest = values[j];

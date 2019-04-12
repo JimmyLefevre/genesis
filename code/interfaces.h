@@ -130,13 +130,13 @@ struct Program_State {                // Updated by...
     s32 audio_output_channels;        // Platform
     
     Input input;                      // Platform
-    bool should_be_fullscreen;        // Either @Settings
-    s32 window_size[2];               // Either @Settings
+    bool should_be_fullscreen;        // Either ;Settings
+    s32 window_size[2];               // Either ;Settings
     s32 draw_rect[4];                 // Game
     s32 cursor_position_in_pixels[2]; // Platform
     bool should_render;               // Platform
     
-    Input_Settings input_settings;    // Game   @Settings
+    Input_Settings input_settings;    // Game ;Settings
     
     u32 last_key_pressed;             // Platform
     

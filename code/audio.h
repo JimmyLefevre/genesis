@@ -4,6 +4,8 @@
 #define MAX_SOUND_COUNT 256
 // @Hardcoded: We probably want to pass this and AUDIO_HZ at runtime?
 #define AUDIO_BUFFER_SIZE 44100
+#define PLAYING_SOUND_HANDLE_BITFIELD_SIZE (IDIV_ROUND_UP(MAX_SOUND_COUNT, 64))
+#define AUDIO_PAGE_SIZE UNPADDED_SAMPLES_PER_CHUNK
 
 enum Sound_Uid {
     SOUND_UID_unloaded = 0,
@@ -27,32 +29,6 @@ struct Loaded_Sound {
     Asset_Location streaming_data;
     s32 chunk_count;
     u8 channel_count;
-    u8 category;
-};
-
-// @Speed: Right now, we're reading from disk for every sound.
-// We may want to make a chunk cache in order to avoid doing so.
-struct Playing_Sound {
-    union {
-        struct {
-            s16 *current_samples;
-            s16 *next_samples;
-        };
-        s16 *samples[2];
-    };
-    
-    Play_Cursor cursor;
-    
-    s32 next_chunk_to_load;
-    s32 chunk_count;
-    s16 loaded;
-    u8 channel_index;
-    
-    bool silent;
-    u8 category; // @Compression
-    
-    v2 position;
-    v2 new_position;
 };
 
 enum Audio_Category {
@@ -67,17 +43,6 @@ enum Audio_Category {
 #define STRUCT_TYPE Loaded_Sound_Array
 #include "static_array.cpp"
 
-#define ITEM_TYPE Playing_Sound
-#define ITEM_MAX_COUNT MAX_SOUND_COUNT
-#define COUNT_TYPE s32
-#define STRUCT_TYPE Playing_Sound_Array
-#include "static_array.cpp"
-
-#define ITEM_TYPE s32
-#define ITEM_MAX_COUNT MAX_SOUND_COUNT
-#define COUNT_TYPE s32
-#include "static_array.cpp"
-
 struct Audio_Volumes {
     union {
         struct {
@@ -89,19 +54,48 @@ struct Audio_Volumes {
     };
 };
 
+struct Audio_Play_Commands {
+    f32 *old_volume;
+    f32 *volume;
+    f32 pitch;
+    s16 live_plays;
+    u8 category;
+};
+
 struct Audio_Info {
     u8 channel_count;
     
     Audio_Volumes current_volume;
-    Audio_Volumes target_volume; // @Settings
+    Audio_Volumes target_volume; // ;Settings
     
-    f32 *temp_buffer ; // f32[audio_buffer_size]
+    f32 *temp_buffer; // f32[audio_buffer_size]
     f32 **mix_buffers; // f32[channel_count][audio_buffer_size]
-    s16  *out_buffer ; // s16[audio_buffer_size]
+    s16 *out_buffer; // s16[audio_buffer_size]
     
-    Loaded_Sound_Array   loads;
-    Playing_Sound_Array sounds;
-    static_array_s32 sounds_to_destroy;
+    Loaded_Sound_Array loads;
+    
+    s16 *audio_pages[MAX_SOUND_COUNT * 2];
+    s32 audio_page_ids[MAX_SOUND_COUNT * 2];
+    s16 audio_page_uses[MAX_SOUND_COUNT * 2];
+    
+    Audio_Play_Commands play_commands[MAX_SOUND_COUNT]; // ;NoRelocate
+    u64 free_commands[PLAYING_SOUND_HANDLE_BITFIELD_SIZE];
+    
+    struct {
+        s16 count;
+        s16 loads[MAX_SOUND_COUNT];
+        s32 samples_played[MAX_SOUND_COUNT];
+        f32 sample_offset[MAX_SOUND_COUNT];
+        u32 audio_pages[MAX_SOUND_COUNT]; // 0xCCCCNNNN, C = current page, N = next page
+        s8 channel_indices[MAX_SOUND_COUNT];
+        s16 commands[MAX_SOUND_COUNT];
+    } plays;
+    
+    s16 page_discards[MAX_SOUND_COUNT];
+    s16 page_discard_count;
+    
+    s16 plays_to_retire[MAX_SOUND_COUNT];
+    s16 play_retire_count;
     
     s16 sounds_by_uid[SOUND_UID_COUNT];
 };

@@ -4,6 +4,8 @@
 #define GRAVITY 9.81f
 #define LARGE_FLOAT 3.e+37f
 
+#define IDIV_ROUND_UP(a, b) (((a) + (b) - 1) / (b))
+
 struct v2 {
     f32 x;
     f32 y;
@@ -1132,7 +1134,6 @@ static inline s32 bitscan_reverse(usize value, s32 *index) {
         return 1;
     }
     
-    *index = 0;
     return 0;
 }
 
@@ -1150,6 +1151,5 @@ static inline s32 bitscan_forward(usize value, s32 *index) {
         return 1;
     }
     
-    *index = 0;
     return 0;
 }

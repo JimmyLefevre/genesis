@@ -302,7 +302,7 @@ static void *push_size(Memory_Block *block, usize size, const u32 align = 4) {
 }
 
 #define push_struct(block, type, ...) (type *)push_size(block, sizeof(type), ## __VA_ARGS__)
-#define push_array(block, type, count, ...) (type *)push_size(block, count*sizeof(type), ## __VA_ARGS__)
+#define push_array(block, type, count, ...) (type *)push_size(block, (count)*sizeof(type), ## __VA_ARGS__)
 
 inline void sub_block(Memory_Block *sub, Memory_Block *main,
                       const usize size, const u32 align = 16) {

@@ -22,7 +22,7 @@
 #ifndef ITERATOR_TYPE
 #define ITERATOR_TYPE COUNT_TYPE
 #else
-#error Static arrays expect ITERATOR_TYPE to be COUNT_TYPE by default.
+#error Static arrays only allow ITERATOR_TYPE to be COUNT_TYPE.
 #endif
 
 struct STRUCT_TYPE {

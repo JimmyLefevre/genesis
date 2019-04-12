@@ -629,7 +629,12 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
                         
                         // :AudioInVisualState We don't want to think about whether we're in a visual or an actual update.
                         if(audio) {
-                            play_sound(audio, FIND_SOUND_ID(audio, erase), spawn_offset);
+                            Audio_Play_Commands *commands = play_sound(audio, FIND_SOUND_ID(audio, erase));
+                            if(commands) {
+                                u8 channel_count = audio->channel_count;
+                                compute_volumes_for_position(commands->volume, channel_count, spawn_offset);
+                                mem_copy(commands->volume, commands->old_volume, sizeof(f32) * channel_count);
+                            }
                         }
                     }
                 }
@@ -1501,13 +1506,11 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         audio_info->out_buffer = push_array(game_block, s16, output_hz * output_channels);
         audio_info->channel_count = (u8)output_channels;
         init(&audio_info->loads, game_block);
-        init(&audio_info->sounds, game_block);
-        init(&audio_info->sounds_to_destroy, game_block);
         
         // Chunk buffers:
-        for(s32 i = 0; i < MAX_SOUND_COUNT; ++i) {
-            audio_info->sounds.items[i].current_samples = push_array(game_block, s16, SAMPLES_PER_CHUNK);
-            audio_info->sounds.items[i].next_samples    = push_array(game_block, s16, SAMPLES_PER_CHUNK);
+        for(s32 i = 0; i < MAX_SOUND_COUNT * 2; ++i) {
+            audio_info->audio_pages[i] = push_array(game_block, s16, AUDIO_PAGE_SIZE + 1);
+            audio_info->audio_page_ids[i] = -1;
         }
         
         // We're assuming current_volume was initialised when loading the config.
@@ -1518,6 +1521,13 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         // When we get to unloading sounds, be sure to reset these values to -1.
         FORI(0, SOUND_UID_COUNT) {
             audio_info->sounds_by_uid[i] = -1;
+        }
+        FORI(0, PLAYING_SOUND_HANDLE_BITFIELD_SIZE) {
+            audio_info->free_commands[i] = 0xFFFFFFFFFFFFFFFF;
+        }
+        FORI(0, MAX_SOUND_COUNT) {
+            audio_info->play_commands[i].old_volume = push_array(game_block, f32, output_channels);
+            audio_info->play_commands[i].volume = push_array(game_block, f32, output_channels);
         }
     }
     
@@ -2118,7 +2128,10 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         
         { // FACS:
             s16 stereo = LOAD_MUSIC(audio_info, &pack, danse_macabre);
-            play_music(audio_info, stereo);
+            Audio_Play_Commands *commands = play_music(audio_info, stereo);
+            commands->volume[0] = 0.5f;
+            commands->volume[1] = 0.5f;
+            mem_copy(commands->volume, commands->old_volume, sizeof(f32) * 2);
         }
         
         { // Fonts:

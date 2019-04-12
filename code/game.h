@@ -49,32 +49,32 @@ enum Entity_Type {
 
 struct Game {
     // Metagame:
-    u32 current_level_index; // Serialised
+    u32 current_level_index; // ;Serialised
     u32 desired_level_index;
     
-    v2 xhair_offset; // Immediate
-    v2 camera_p; // Immediate
-    f32 camera_zoom; // Immediate
+    v2 xhair_offset; // ;Immediate
+    v2 camera_p; // ;Immediate
+    f32 camera_zoom; // ;Immediate
     
     s32 current_player;
     struct {
-        s32   count; // Serialised
-        v2    camera_ps        [     MAX_PLAYER_COUNT]; // Immediate
+        s32   count; // ;Serialised
+        v2    camera_ps        [     MAX_PLAYER_COUNT]; // ;Immediate
         v2    dps              [     MAX_PLAYER_COUNT];
-        v2    ps               [     MAX_PLAYER_COUNT]; // Serialised
+        v2    ps               [     MAX_PLAYER_COUNT]; // ;Serialised
     } players;
     
     // Collapse this into a player field?
     struct {
-        s32 count; // Serialised
-        v2 offsets[MAX_PARTNER_COUNT]; // Serialised
-        v2 ps[MAX_PARTNER_COUNT]; // Immediate
+        s32 count; // ;Serialised
+        v2 offsets[MAX_PARTNER_COUNT]; // ;Serialised
+        v2 ps[MAX_PARTNER_COUNT]; // ;Immediate
     } partners;
     
     struct {
-        s32 count; // Serialised
-        v2  ps                 [MAX_LIVE_ENTITY_COUNT]; // Serialised
-        f32 cooldowns          [MAX_LIVE_ENTITY_COUNT]; // Serialised
+        s32 count; // ;Serialised
+        v2  ps                 [MAX_LIVE_ENTITY_COUNT]; // ;Serialised
+        f32 cooldowns          [MAX_LIVE_ENTITY_COUNT]; // ;Serialised
     } turrets;
     
     struct {
@@ -86,14 +86,14 @@ struct Game {
     } bullets;
     
     struct {
-        s32 count; // Serialised
-        v2  ps                    [MAX_LIVE_ENTITY_COUNT]; // Serialised
+        s32 count; // ;Serialised
+        v2  ps                    [MAX_LIVE_ENTITY_COUNT]; // ;Serialised
         v2  dps                   [MAX_LIVE_ENTITY_COUNT];
     } dogs;
     
     struct {
-        s32 count; // Serialised
-        v2  ps            [MAX_LIVE_ENTITY_COUNT]; // Serialised
+        s32 count; // ;Serialised
+        v2  ps            [MAX_LIVE_ENTITY_COUNT]; // ;Serialised
     } wall_turrets;
     
     struct {
@@ -102,14 +102,14 @@ struct Game {
     } trees;
     
     struct {
-        s32 count; // Serialised
-        v2 ps                    [MAX_LIVE_ENTITY_COUNT]; // Serialised
+        s32 count; // ;Serialised
+        v2 ps                    [MAX_LIVE_ENTITY_COUNT]; // ;Serialised
     } targets;
     
     bool lost;
     
     struct {
-        s32 count; // Immediate
+        s32 count; // ;Immediate
         u8  types                [MAX_LIVE_ENTITY_COUNT];
         s32 indices              [MAX_LIVE_ENTITY_COUNT];
     } removals;
@@ -120,7 +120,7 @@ struct Game {
     } logged_removals;
     
     // Map:
-    v2 map_halfdim; // Serialised
+    v2 map_halfdim; // ;Serialised
     
 #if GENESIS_DEV
     // Developer:

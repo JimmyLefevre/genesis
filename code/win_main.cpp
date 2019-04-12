@@ -703,7 +703,8 @@ static void win_sample_input(void * wnd_handle) {
                         dm[0] += mouse.lLastX;
                         dm[1] -= mouse.lLastY;
                     } else {
-                        UNHANDLED;
+                        // UNHANDLED;
+                        // This happens sometimes when we have multiple monitors active.
                     }
                 }
                 else {
