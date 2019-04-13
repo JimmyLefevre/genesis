@@ -58,13 +58,17 @@ static void load_chunk(Asset_Location location, s16 *samples, s32 chunk_index, s
 
 THREAD_JOB_PROC(load_audio_chunk_job) {
     TIME_BLOCK;
+    // In the load_for_existing_sound case, we may want to zero_mem the samples first,
+    // just in case we don't manage to load in time.
     Load_Audio_Chunk_Payload *payload = (Load_Audio_Chunk_Payload *)data;
     load_chunk(payload->location, payload->samples, payload->chunk_index, payload->channel_count, payload->channel_index);
     
-    u64 bit_index = payload->read_bit_index;
-    u64 bitfield = bit_index / 64;
-    u64 mod = bit_index % 64;
-    payload->completed_reads[thread_index][bitfield] |= ((u64)1 << mod);
+    if(payload->completed_reads) {
+        u64 bit_index = payload->read_bit_index;
+        u64 bitfield = bit_index / 64;
+        u64 mod = bit_index % 64;
+        payload->completed_reads[thread_index][bitfield] |= ((u64)1 << mod);
+    }
 }
 
 static void load_sound_info(Loaded_Sound *loaded, Asset_Location *location, FACS_Header *facs, u8 category) {
@@ -224,9 +228,9 @@ static void _play_sound(Audio_Info *audio, s16 loaded_id, s32 channel_index, s16
         payload.completed_reads = audio->completed_reads;
         payload.read_bit_index = payload_index;
         payload.channel_index = (s8)channel_index;
-        audio->load_payloads[payload_index] = payload;
+        audio->load_for_new_sound_payloads[payload_index] = payload;
         
-        os_platform.add_thread_job(&Implicit_Context::load_audio_chunk_job, (void *)(audio->load_payloads + (payload_index)));
+        os_platform.add_thread_job(&Implicit_Context::load_audio_chunk_job, (void *)(audio->load_for_new_sound_payloads + (payload_index)));
     } else {
         audio->completed_reads[0][read_index] |= ((u64)1 << read_mod);
     }
@@ -242,9 +246,9 @@ static void _play_sound(Audio_Info *audio, s16 loaded_id, s32 channel_index, s16
         payload.completed_reads = audio->completed_reads;
         payload.read_bit_index = payload_index;
         payload.channel_index = (s8)channel_index;
-        audio->load_payloads[payload_index] = payload;
+        audio->load_for_new_sound_payloads[payload_index] = payload;
         
-        os_platform.add_thread_job(&Implicit_Context::load_audio_chunk_job, (void *)(audio->load_payloads + (payload_index)));
+        os_platform.add_thread_job(&Implicit_Context::load_audio_chunk_job, (void *)(audio->load_for_new_sound_payloads + (payload_index)));
     } else {
         audio->completed_reads[0][read_index] |= ((u64)1 << (read_mod + 1));
     }
@@ -543,6 +547,7 @@ s16 *Implicit_Context::update_audio(Audio_Info *audio, const s32 samples_to_play
             s16 play = audio->page_discards[i];
             s16 load = audio->plays.loads[play];
             u32 pages = audio->plays.audio_pages[play];
+            s16 commands = audio->plays.commands[play];
             s32 samples_played = audio->plays.samples_played[play];
             Loaded_Sound *loaded = audio->loads.items + load;
             s8 channel_index = audio->plays.channel_indices[play];
@@ -559,7 +564,18 @@ s16 *Implicit_Context::update_audio(Audio_Info *audio, const s32 samples_to_play
                 bool same_id;
                 next_page_to_load = find_audio_page(audio, next_chunk_to_load, load, &same_id);
                 audio->audio_page_uses[next_page_to_load] += 1;
-                load_chunk(loaded->streaming_data, audio->audio_pages[next_page_to_load], next_chunk_to_load, loaded->channel_count, channel_index);
+                
+                Load_Audio_Chunk_Payload payload;
+                payload.location = loaded->streaming_data;
+                payload.samples = audio->audio_pages[next_page_to_load];
+                payload.chunk_index = next_chunk_to_load;
+                payload.channel_count = loaded->channel_count;
+                payload.completed_reads = 0;
+                payload.channel_index = channel_index;
+                audio->load_for_existing_sound_payloads[commands] = payload;
+                os_platform.add_thread_job(&Implicit_Context::load_audio_chunk_job, (void *)(audio->load_for_existing_sound_payloads + commands));
+                
+                // load_chunk(loaded->streaming_data, audio->audio_pages[next_page_to_load], next_chunk_to_load, loaded->channel_count, channel_index);
             } else if(next_chunk_to_load > loaded->chunk_count) {
                 s16 add = audio->play_retire_count;
                 audio->plays_to_retire[add] = play;

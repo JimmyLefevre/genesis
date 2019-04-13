@@ -100,7 +100,10 @@ struct Audio_Info {
     Audio_Play_Commands play_commands[MAX_SOUND_COUNT]; // ;NoRelocate
     u64 free_commands[PLAYING_SOUND_HANDLE_BITFIELD_SIZE];
     
-    Load_Audio_Chunk_Payload load_payloads[MAX_SOUND_COUNT * 2]; // ;NoRelocate
+    // @Compression
+    Load_Audio_Chunk_Payload load_for_new_sound_payloads[MAX_SOUND_COUNT * 2]; // ;NoRelocate
+    Load_Audio_Chunk_Payload load_for_existing_sound_payloads[MAX_SOUND_COUNT]; // ;NoRelocate
+    s16 load_for_existing_sound_payload_count;
     
     Audio_Buffered_Play buffered_plays[MAX_SOUND_COUNT]; // ;NoRelocate
     u64 free_buffered_plays[PLAYING_SOUND_HANDLE_BITFIELD_SIZE];
