@@ -56,6 +56,17 @@ static void load_chunk(Asset_Location location, s16 *samples, s32 chunk_index, s
                           bytes_per_chunk);
 }
 
+THREAD_JOB_PROC(load_audio_chunk_job) {
+    TIME_BLOCK;
+    Load_Audio_Chunk_Payload *payload = (Load_Audio_Chunk_Payload *)data;
+    load_chunk(payload->location, payload->samples, payload->chunk_index, payload->channel_count, payload->channel_index);
+    
+    u64 bit_index = payload->read_bit_index;
+    u64 bitfield = bit_index / 64;
+    u64 mod = bit_index % 64;
+    payload->completed_reads[thread_index][bitfield] |= ((u64)1 << mod);
+}
+
 static void load_sound_info(Loaded_Sound *loaded, Asset_Location *location, FACS_Header *facs, u8 category) {
     loaded->streaming_data = *location;
     loaded->chunk_count = facs->chunk_count;
@@ -124,6 +135,25 @@ static s16 find_free_playing_sound_handle(Audio_Info *audio) {
     return (s16)result;
 }
 
+static s32 find_first_free_and_unset_bit(u64 *bitfields, ssize count) {
+    s32 result = -1;
+    
+    FORI_TYPED(s16, 0, count) {
+        u64 field = bitfields[i];
+        if(bitscan_forward(field, &result)) {
+            field &= ~(1 << result);
+            bitfields[i] = field;
+            
+            result += i * 64;
+            break;
+        }
+    }
+    
+    return result;
+}
+
+#if 0
+// Synchronous.
 static void _play_sound(Audio_Info *audio, s16 loaded_id, s32 channel_index, s16 handle) {
     ASSERT(loaded_id != -1);
     Loaded_Sound *loaded = audio->loads.items + loaded_id;
@@ -155,6 +185,71 @@ static void _play_sound(Audio_Info *audio, s16 loaded_id, s32 channel_index, s16
         load_chunk(loaded->streaming_data, audio->audio_pages[found1], 1, loaded->channel_count, channel_index);
     }
 }
+#else
+static void _play_sound(Audio_Info *audio, s16 loaded_id, s32 channel_index, s16 handle) {
+    ASSERT(loaded_id != -1);
+    Loaded_Sound *loaded = audio->loads.items + loaded_id;
+    s16 buffered_index = (s16)find_first_free_and_unset_bit(audio->free_buffered_plays, PLAYING_SOUND_HANDLE_BITFIELD_SIZE);
+    s32 chunk_count = loaded->chunk_count;
+    s16 read_index = (buffered_index * 2) / 64;
+    s16 read_mod = (buffered_index * 2) % 64;
+    bool same_id0 = false;
+    bool same_id1 = false;
+    
+    u32 found0 = find_audio_page(audio, 0, loaded_id, &same_id0);
+    audio->audio_page_uses[found0] += 1;
+    u32 found1 = 0xFFFF;
+    if(chunk_count > 1) {
+        found1 = find_audio_page(audio, 1, loaded_id, &same_id1);
+        audio->audio_page_uses[found1] += 1;
+    }
+    u32 pages = (found0 << 16) | found1;
+    
+    Audio_Buffered_Play buffered;
+    buffered.load = loaded_id;
+    buffered.pages = pages;
+    buffered.channel_index = (s8)channel_index;
+    buffered.commands = handle;
+    
+    audio->buffered_plays[buffered_index] = buffered;
+    
+    if(!same_id0) {
+        s16 payload_index = buffered_index * 2;
+        
+        Load_Audio_Chunk_Payload payload;
+        payload.location = loaded->streaming_data;
+        payload.samples = audio->audio_pages[found0];
+        payload.chunk_index = 0;
+        payload.channel_count = loaded->channel_count;
+        payload.completed_reads = audio->completed_reads;
+        payload.read_bit_index = payload_index;
+        payload.channel_index = (s8)channel_index;
+        audio->load_payloads[payload_index] = payload;
+        
+        os_platform.add_thread_job(&Implicit_Context::load_audio_chunk_job, (void *)(audio->load_payloads + (payload_index)));
+    } else {
+        audio->completed_reads[0][read_index] |= ((u64)1 << read_mod);
+    }
+    if((!same_id1) && (chunk_count > 1)) {
+        // @Duplication
+        s16 payload_index = buffered_index * 2 + 1;
+        
+        Load_Audio_Chunk_Payload payload;
+        payload.location = loaded->streaming_data;
+        payload.samples = audio->audio_pages[found1];
+        payload.chunk_index = 1;
+        payload.channel_count = loaded->channel_count;
+        payload.completed_reads = audio->completed_reads;
+        payload.read_bit_index = payload_index;
+        payload.channel_index = (s8)channel_index;
+        audio->load_payloads[payload_index] = payload;
+        
+        os_platform.add_thread_job(&Implicit_Context::load_audio_chunk_job, (void *)(audio->load_payloads + (payload_index)));
+    } else {
+        audio->completed_reads[0][read_index] |= ((u64)1 << (read_mod + 1));
+    }
+}
+#endif
 
 static Audio_Play_Commands *play_sound(Audio_Info *audio, s16 loaded_id) {
     if(loaded_id != -1) {
@@ -292,6 +387,8 @@ void Implicit_Context::mix_samples(const s16 *samples, const s32 pitched_sample_
 s16 *Implicit_Context::update_audio(Audio_Info *audio, const s32 samples_to_play, const f32 dt) {
     TIME_BLOCK;
     
+    const s32 core_count = audio->core_count;
+    
     { // Changing master volume:
         const f32 t_for_full_shift = 0.5f;
         const f32 volume_shift = (1.0f / t_for_full_shift) * dt;
@@ -329,6 +426,65 @@ s16 *Implicit_Context::update_audio(Audio_Info *audio, const s32 samples_to_play
     }
     for(s32 i = 0; i < output_channel_count; ++i) {
         zero_mem(audio->out_buffer, sizeof(s16) * AUDIO_BUFFER_SIZE);
+    }
+    
+    
+    { // Buffered load gather:
+        FORI_NAMED(thread, 0, core_count) {
+            u64 *reads = audio->completed_reads[thread];
+            
+            FORI(0, PAGE_LOAD_BITFIELD_SIZE) {
+                if(reads[i]) {
+                    audio->buffered_play_loaded_pages[i] |= reads[i];
+                    reads[i] = 0;
+                }
+            }
+        }
+        
+        // @Refactor
+        // We might be better off checking the modified bits when gathering them in the loop above
+        // instead of doing this.
+        FORI_TYPED_NAMED(s16, free_bitfield, 0, PLAYING_SOUND_HANDLE_BITFIELD_SIZE) {
+            u64 free = audio->free_buffered_plays[free_bitfield];
+            u64 present = free ^ 0xFFFFFFFFFFFFFFFF;
+            
+            if(present) {
+                FORI_TYPED_NAMED(s16, bit_index, 0, 64) {
+                    u64 bit = (u64)1 << bit_index;
+                    if(present & bit) {
+                        s16 i = 64 * free_bitfield + bit_index;
+                        s16 page0_bit_index = i * 2;
+                        s16 page1_bit_index = i * 2 + 1;
+                        
+                        u64 bitfield = page0_bit_index / 64;
+                        u64 page0_mod = page0_bit_index % 64;
+                        u64 page1_mod = page1_bit_index % 64;
+                        
+                        u64 page0_bit = ((u64)1 << page0_mod);
+                        u64 page1_bit = ((u64)1 << page1_mod);
+                        
+                        u64 loaded = audio->buffered_play_loaded_pages[bitfield];
+                        
+                        if((loaded & page0_bit) && (loaded & page1_bit)) {
+                            Audio_Buffered_Play *buffered = audio->buffered_plays + i;
+                            s16 add = audio->plays.count++;
+                            
+                            audio->plays.loads[add] = buffered->load;
+                            audio->plays.samples_played[add] = 0;
+                            audio->plays.sample_offset[add] = 0.0f;
+                            audio->plays.audio_pages[add] = buffered->pages;
+                            audio->plays.channel_indices[add] = buffered->channel_index;
+                            audio->plays.commands[add] = buffered->commands;
+                            
+                            free |= bit;
+                            if(free == 0xFFFFFFFFFFFFFFFF) break;
+                        }
+                    }
+                }
+            }
+            
+            audio->free_buffered_plays[free_bitfield] = free;
+        }
     }
     
     f32 samples_to_play_f = (f32)samples_to_play;
@@ -380,6 +536,7 @@ s16 *Implicit_Context::update_audio(Audio_Info *audio, const s32 samples_to_play
         audio->plays.samples_played[i] = end_samples_played;
         audio->plays.sample_offset[i] = sample_offset + f_mod(samples_to_play_f / pitch, 1.0f);
     }
+    audio->current_volume = audio->target_volume;
     
     {
         FORI(0, audio->page_discard_count) {
@@ -419,11 +576,10 @@ s16 *Implicit_Context::update_audio(Audio_Info *audio, const s32 samples_to_play
     {
         // For now, we know these will be added in ascending order, so we can just
         // loop backwards and avoid sorting. @Temporary?
-        // s16_dumb_sort_descending(audio->plays_to_retire, audio->play_retire_count);
         
         s32 retire_count = audio->play_retire_count;
         s16 play_count = audio->plays.count;
-        for(s32 i = retire_count - 1; i >= 0; ++i) {
+        for(s32 i = retire_count - 1; i >= 0; --i) {
             s16 play = audio->plays_to_retire[i];
             s32 sub = --play_count;
             s16 icommands = audio->plays.commands[play];

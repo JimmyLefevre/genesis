@@ -1416,6 +1416,8 @@ void ta_to_texture_ids(string ta, Rendering_Info *render_info, Texture_ID *out_i
 GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
     TIME_BLOCK;
     
+    const s32 core_count = program_state->core_count;
+    
     Game_Block_Info * const info = push_struct(game_block, Game_Block_Info);
     info->log.temporary_buffer_size = 8192;
     info->log.temporary_buffer.data = push_array(game_block, u8, info->log.temporary_buffer_size);
@@ -1497,6 +1499,10 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         const s32 output_hz       = program_state->audio_output_rate;
         const s32 output_channels = program_state->audio_output_channels;
         
+        // This should not necessarily be core_count. Rather, it should be the number of threads
+        // we want working at the same time on audio jobs.
+        audio_info->core_count = core_count;
+        
         // Processing buffers:
         audio_info->temp_buffer = push_array(game_block, f32  , output_hz      );
         audio_info->mix_buffers = push_array(game_block, f32 *, output_channels);
@@ -1513,6 +1519,15 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
             audio_info->audio_page_ids[i] = -1;
         }
         
+        { // Threaded read bitfield:
+            u64 **completed_reads = push_array(game_block, u64 *, core_count);
+            FORI(0, core_count) {
+                completed_reads[i] = push_array(game_block, u64, PAGE_LOAD_BITFIELD_SIZE, 64); // @Hardcoded cache line size
+            }
+            audio_info->completed_reads = completed_reads;
+            push_size(game_block, 0, 64);
+        }
+        
         // We're assuming current_volume was initialised when loading the config.
         audio_info->target_volume.master                            = audio_info->current_volume.master;
         audio_info->target_volume.by_category[AUDIO_CATEGORY_SFX  ] = audio_info->current_volume.by_category[AUDIO_CATEGORY_SFX  ];
@@ -1524,6 +1539,7 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         }
         FORI(0, PLAYING_SOUND_HANDLE_BITFIELD_SIZE) {
             audio_info->free_commands[i] = 0xFFFFFFFFFFFFFFFF;
+            audio_info->free_buffered_plays[i] = 0xFFFFFFFFFFFFFFFF;
         }
         FORI(0, MAX_SOUND_COUNT) {
             audio_info->play_commands[i].old_volume = push_array(game_block, f32, output_channels);
@@ -1535,7 +1551,7 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
     { // Profiler:
         Profiler profiler = {};
         
-        profile_init(&profiler, game_block, program_state->core_count);
+        profile_init(&profiler, game_block, core_count);
         
         info->profiler = profiler;
         
@@ -2129,9 +2145,9 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         { // FACS:
             s16 stereo = LOAD_MUSIC(audio_info, &pack, danse_macabre);
             Audio_Play_Commands *commands = play_music(audio_info, stereo);
-            commands->volume[0] = 0.5f;
-            commands->volume[1] = 0.5f;
-            mem_copy(commands->volume, commands->old_volume, sizeof(f32) * 2);
+            commands->volume[0] = 1.0f;
+            commands->volume[1] = 1.0f;
+            mem_copy(commands->volume, commands->old_volume, sizeof(f32[2]));
         }
         
         { // Fonts:
@@ -2146,7 +2162,7 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
     }
     
     {
-        for(s32 i = 0; i < 63; ++i) {
+        for(s32 i = 0; i < 16; ++i) {
             os_platform.add_thread_job(&Implicit_Context::test_thread_job, (void *)(u64)i);
         }
     }

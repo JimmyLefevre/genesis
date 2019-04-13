@@ -5,6 +5,7 @@
 // @Hardcoded: We probably want to pass this and AUDIO_HZ at runtime?
 #define AUDIO_BUFFER_SIZE 44100
 #define PLAYING_SOUND_HANDLE_BITFIELD_SIZE (IDIV_ROUND_UP(MAX_SOUND_COUNT, 64))
+#define PAGE_LOAD_BITFIELD_SIZE (IDIV_ROUND_UP(MAX_SOUND_COUNT * 2, 64))
 #define AUDIO_PAGE_SIZE UNPADDED_SAMPLES_PER_CHUNK
 
 enum Sound_Uid {
@@ -62,7 +63,25 @@ struct Audio_Play_Commands {
     u8 category;
 };
 
+struct Audio_Buffered_Play {
+    s16 load;
+    u32 pages;
+    s8 channel_index;
+    s16 commands;
+};
+
+struct Load_Audio_Chunk_Payload {
+    Asset_Location location;
+    s16 *samples;
+    s32 chunk_index;
+    s32 channel_count;
+    u64 **completed_reads;
+    s16 read_bit_index;
+    s8 channel_index;
+};
+
 struct Audio_Info {
+    s32 core_count;
     u8 channel_count;
     
     Audio_Volumes current_volume;
@@ -80,6 +99,14 @@ struct Audio_Info {
     
     Audio_Play_Commands play_commands[MAX_SOUND_COUNT]; // ;NoRelocate
     u64 free_commands[PLAYING_SOUND_HANDLE_BITFIELD_SIZE];
+    
+    Load_Audio_Chunk_Payload load_payloads[MAX_SOUND_COUNT * 2]; // ;NoRelocate
+    
+    Audio_Buffered_Play buffered_plays[MAX_SOUND_COUNT]; // ;NoRelocate
+    u64 free_buffered_plays[PLAYING_SOUND_HANDLE_BITFIELD_SIZE];
+    
+    u64 buffered_play_loaded_pages[PAGE_LOAD_BITFIELD_SIZE]; // Two bits per play.
+    u64 **completed_reads; // ;ByThread Two bits per play.
     
     struct {
         s16 count;

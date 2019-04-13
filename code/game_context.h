@@ -14,12 +14,10 @@ struct Implicit_Context {
     u32 thread_index;
     
     void g_full_update(Game *, Input *, const f64, Audio_Info *, Datapack_Handle *);
-    // void text_update(Text_Info *, Rendering_Info *);
     GAME_INIT_MEMORY(g_init_mem);
     GAME_RUN_FRAME(g_run_frame);
     void g_modify_textures(Game *, Rendering_Info *);
     inline void reset_temporary_memory();
-    void test_thread_job(void *);
     s16 *update_audio(Audio_Info *, const s32, const f32);
     void draw_game(Rendering_Info *, Game *, Asset_Storage *);
     string tprint(char *, ...);
@@ -32,6 +30,9 @@ struct Implicit_Context {
     void init_glyph_cache(Text_Info *);
     void draw_string_immediate(Text_Info *, Rendering_Info *, string, v2, f32, s8, bool, v4);
     void text_update(Text_Info *, Rendering_Info *);
+    
+    void test_thread_job(void *);
+    void load_audio_chunk_job(void *);
     
 #if GENESIS_DEV
     void profile_update(Profiler *, Program_State *, Text_Info *, Rendering_Info *, Input *);
