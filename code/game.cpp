@@ -1522,7 +1522,7 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         { // Threaded read bitfield:
             u64 **completed_reads = push_array(game_block, u64 *, core_count);
             FORI(0, core_count) {
-                completed_reads[i] = push_array(game_block, u64, PAGE_LOAD_BITFIELD_SIZE, 64); // @Hardcoded cache line size
+                completed_reads[i] = push_array(game_block, u64, PLAYING_SOUND_HANDLE_BITFIELD_SIZE, 64); // @Hardcoded cache line size
             }
             audio_info->completed_reads = completed_reads;
             push_size(game_block, 0, 64);
