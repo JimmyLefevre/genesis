@@ -6,7 +6,6 @@ Profiler interface:
 - Easier scrolling.
 - Add a way to revert our selection to the current frame.
 Start managing assets:
-- The audio system needs to know about which music is currently playing for cross-fading.
 - We need to change the currently-playing music when loading a new level.
 
 

@@ -16,9 +16,9 @@ struct Implicit_Context {
     void g_full_update(Game *, Input *, const f64, Audio_Info *, Datapack_Handle *);
     GAME_INIT_MEMORY(g_init_mem);
     GAME_RUN_FRAME(g_run_frame);
+    s16 *update_audio(Audio_Info *, const s32, const f32);
     void g_modify_textures(Game *, Rendering_Info *);
     inline void reset_temporary_memory();
-    s16 *update_audio(Audio_Info *, const s32, const f32);
     void draw_game(Rendering_Info *, Game *, Asset_Storage *);
     string tprint(char *, ...);
     void clone_game_state(Game *, Game *);
@@ -32,7 +32,10 @@ struct Implicit_Context {
     void text_update(Text_Info *, Rendering_Info *);
     
     void test_thread_job(void *);
-    void load_audio_chunk_job(void *);
+    void entire_sound_update(void *);
+    void load_unbatched_first_audio_chunk_job(void *);
+    void load_batched_first_audio_chunk_job(void *);
+    void load_unbatched_next_audio_chunk_job(void *);
     
 #if GENESIS_DEV
     void profile_update(Profiler *, Program_State *, Text_Info *, Rendering_Info *, Input *);

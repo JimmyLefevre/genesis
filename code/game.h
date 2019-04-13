@@ -144,6 +144,11 @@ struct Game_Clock {
     f64 sim_time;
 };
 
+struct Entire_Sound_Update_Payload {
+    Audio_Info *audio;
+    f32 dt;
+};
+
 struct Game_Block_Info {
     Game_Client client;
     Rendering_Info render_info;
@@ -152,6 +157,8 @@ struct Game_Block_Info {
     Game_Clock clock;
     Log log;
     Menu menu;
+    
+    Entire_Sound_Update_Payload sound_update_payload;
     
 #if GENESIS_DEV
     Profiler profiler;

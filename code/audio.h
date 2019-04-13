@@ -6,6 +6,7 @@
 #define AUDIO_BUFFER_SIZE 44100
 #define PLAYING_SOUND_HANDLE_BITFIELD_SIZE (IDIV_ROUND_UP(MAX_SOUND_COUNT, 64))
 #define AUDIO_PAGE_SIZE UNPADDED_SAMPLES_PER_CHUNK
+#define MAX_MUSIC_COUNT 4
 
 enum Sound_Uid {
     SOUND_UID_unloaded = 0,
@@ -58,7 +59,6 @@ struct Audio_Play_Commands {
     f32 *old_volume;
     f32 *volume;
     f32 pitch;
-    s16 live_plays;
     u8 category;
 };
 
@@ -76,6 +76,30 @@ struct Load_Audio_Chunk_Payload {
     s32 chunk_index;
     s16 page;
     s8 channel_index;
+    s8 sync;
+};
+
+struct Audio_Music_Commands {
+    f32 old_volume;
+    f32 volume;
+    s16 play_commands[8];
+    s32 channel_count;
+};
+
+struct Audio_Load_Queue {
+    s32 first_free; // NOT modded.
+    s16 buffered[MAX_SOUND_COUNT];
+};
+
+struct Audio_Page_Identifier {
+    union {
+        struct {
+            s16 chunk_index;
+            s16 channel_index;
+            s16 load;
+        };
+        u64 all;
+    };
 };
 
 struct Audio_Info {
@@ -92,19 +116,20 @@ struct Audio_Info {
     Loaded_Sound_Array loads;
     
     s16 *audio_pages[MAX_SOUND_COUNT * 2];
-    s32 audio_page_ids[MAX_SOUND_COUNT * 2];
+    Audio_Page_Identifier audio_page_ids[MAX_SOUND_COUNT * 2];
     s16 audio_page_uses[MAX_SOUND_COUNT * 2];
+    
+    Audio_Music_Commands music_commands[MAX_MUSIC_COUNT];
+    s16 music_count;
     
     Audio_Play_Commands play_commands[MAX_SOUND_COUNT]; // ;NoRelocate
     u64 free_commands[PLAYING_SOUND_HANDLE_BITFIELD_SIZE];
     
+    Audio_Buffered_Play buffered_plays[MAX_SOUND_COUNT]; // ;NoRelocate ;Parallel:play_commands
     Load_Audio_Chunk_Payload load_payloads[MAX_SOUND_COUNT * 2]; // ;NoRecolate ;Parallel:audio_pages
     
-    Audio_Buffered_Play buffered_plays[MAX_SOUND_COUNT]; // ;NoRelocate
-    u64 free_buffered_plays[PLAYING_SOUND_HANDLE_BITFIELD_SIZE];
-    
-    u64 buffered_play_first_page_loads[PLAYING_SOUND_HANDLE_BITFIELD_SIZE];
-    u64 **completed_reads; // ;PerThread Two bits per play.
+    Audio_Load_Queue **load_queues; // ;PerThread
+    s32 *last_gather_first_frees; // s32[core_count]
     
     struct {
         s16 count;
@@ -123,4 +148,14 @@ struct Audio_Info {
     s16 play_retire_count;
     
     s16 sounds_by_uid[SOUND_UID_COUNT];
+    
+    struct {
+        s16 count;
+        s16 buffered[8];
+    } load_batches[MAX_MUSIC_COUNT];
+    volatile s32 load_syncs[MAX_MUSIC_COUNT + 1];
+    
+#if GENESIS_DEV
+    bool being_updated;
+#endif
 };

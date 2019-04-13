@@ -776,8 +776,6 @@ void Implicit_Context::text_update(Text_Info *info, Rendering_Info *render_info)
             const s16 stride = width;
             const s32 pixel_count = stride * height;
             
-            s16 one_pixel_in_ttf = (s16)((1.0f / raster_scale) + 0.5f);
-            
             if((temporary_memory.size - temporary_memory.used) < ((sizeof(f32) + sizeof(u32)) * pixel_count)) {
                 flush_rasters_to_atlas(info, info->raster_requests.hash_indices + total_pack_count,
                                        raster_out, pack_dims, offsets, pack_count,

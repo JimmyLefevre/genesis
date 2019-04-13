@@ -9,8 +9,8 @@
 
 #if OS_WINDOWS
 #define WRITE_FENCE _WriteBarrier(); _mm_sfence()
-#define ATOMIC_INC32(value) _InterlockedIncrement((volatile s32 *)value)
-#define ATOMIC_INC64(value) _InterlockedIncrement64((volatile s64 *)value)
+#define ATOMIC_INC32(value) _InterlockedIncrement((value))
+#define ATOMIC_INC64(value) _InterlockedIncrement64((value))
 #endif
 
 inline void xorshift_x4(__m128i *state) {

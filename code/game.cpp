@@ -1514,18 +1514,22 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         init(&audio_info->loads, game_block);
         
         // Chunk buffers:
+        Audio_Page_Identifier bad_id;
+        bad_id.all = 0xFFFFFFFFFFFFFFFF;
         for(s32 i = 0; i < MAX_SOUND_COUNT * 2; ++i) {
             audio_info->audio_pages[i] = push_array(game_block, s16, AUDIO_PAGE_SIZE + 1);
-            audio_info->audio_page_ids[i] = -1;
+            audio_info->audio_page_ids[i] = bad_id;
         }
         
         { // Threaded read bitfield:
-            u64 **completed_reads = push_array(game_block, u64 *, core_count);
+            Audio_Load_Queue **queues = push_array(game_block, Audio_Load_Queue *, core_count);
             FORI(0, core_count) {
-                completed_reads[i] = push_array(game_block, u64, PLAYING_SOUND_HANDLE_BITFIELD_SIZE, 64); // @Hardcoded cache line size
+                queues[i] = push_struct(game_block, Audio_Load_Queue, 64); // @Hardcoded cache line size
             }
-            audio_info->completed_reads = completed_reads;
+            audio_info->load_queues = queues;
             push_size(game_block, 0, 64);
+            
+            audio_info->last_gather_first_frees = push_array(game_block, s32, core_count);
         }
         
         // We're assuming current_volume was initialised when loading the config.
@@ -1539,7 +1543,6 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         }
         FORI(0, PLAYING_SOUND_HANDLE_BITFIELD_SIZE) {
             audio_info->free_commands[i] = 0xFFFFFFFFFFFFFFFF;
-            audio_info->free_buffered_plays[i] = 0xFFFFFFFFFFFFFFFF;
         }
         FORI(0, MAX_SOUND_COUNT) {
             audio_info->play_commands[i].old_volume = push_array(game_block, f32, output_channels);
@@ -2144,10 +2147,8 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         
         { // FACS:
             s16 stereo = LOAD_MUSIC(audio_info, &pack, danse_macabre);
-            Audio_Play_Commands *commands = play_music(audio_info, stereo);
-            commands->volume[0] = 1.0f;
-            commands->volume[1] = 1.0f;
-            mem_copy(commands->volume, commands->old_volume, sizeof(f32[2]));
+            Audio_Music_Commands *commands = play_music(audio_info, stereo);
+            commands->volume = 1.0f;
         }
         
         { // Fonts:
@@ -2336,14 +2337,13 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     // -  On the first frame.
     // -  During (OS/computer-level) stalls, such as window moving/resizing.
     // -  When our framerate is fast enough, since we're filling the buffer ahead of time.
+    
     {
-        TIME_BLOCK;
-        u32 samples_to_update = os_platform.begin_sound_update();
-        s16 *update_buffer = 0;
-        if(samples_to_update) {
-            update_buffer = update_audio(audio_info, samples_to_update, (f32)real_dt);
-        }
-        os_platform.end_sound_update(update_buffer, samples_to_update);
+        Entire_Sound_Update_Payload payload;
+        payload.audio = audio_info;
+        payload.dt = (f32)real_dt;
+        info->sound_update_payload = payload;
+        os_platform.add_thread_job(&Implicit_Context::entire_sound_update, &info->sound_update_payload);
     }
     
     // Rendering:

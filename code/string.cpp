@@ -309,7 +309,6 @@ static inline usize string_match_length_upto(char *s0, char *s1, usize max_lengt
 }
 
 static inline u32 string_match_length(string s0, string s1) {
-    ssize result = 0;
     ASSERT(s0.length < U32_MAX);
     ASSERT(s1.length < U32_MAX);
     u32 max_match_length = (u32)s_min((s32)s0.length, (s32)s1.length);
