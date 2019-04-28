@@ -1153,3 +1153,12 @@ static inline s32 bitscan_forward(usize value, s32 *index) {
     
     return 0;
 }
+
+// @Speed!
+static inline u64 bit_reverse(u64 a, ssize bits) {
+    u64 result = 0;
+    FORI(0, bits) {
+        result |= ((a >> i) & 1) << (bits - 1 - i);
+    }
+    return result;
+}

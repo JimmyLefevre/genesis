@@ -61,7 +61,7 @@ static s16 find_existing_audio_page(Audio_Info *audio, s16 chunk_index, s16 chan
     }
 }
 
-static void load_chunk(Asset_Location location, s16 *samples, s32 chunk_index, s32 channel_count, s32 channel_index) {
+static inline void load_chunk(Asset_Location location, s16 *samples, s32 chunk_index, s32 channel_count, s32 channel_index) {
     const s32 bytes_per_chunk = SAMPLES_PER_CHUNK * sizeof(s16);
     os_platform.read_file(location.file_handle, samples,
                           location.offset + sizeof(FACS_Header) +
@@ -120,7 +120,12 @@ THREAD_JOB_PROC(load_unbatched_next_audio_chunk_job) {
 }
 #undef UNPACK_AUDIO_CHUNK_JOB_VARIABLES
 
-static void load_sound_info(Loaded_Sound *loaded, Asset_Location *location, FACS_Header *facs, u8 category) {
+static inline void load_sound_info(Loaded_Sound *loaded, Asset_Location *location, FACS_Header *facs, u8 category) {
+    ASSERT((facs->sample_rate == 44100) &&
+           (facs->chunk_size == UNPADDED_SAMPLES_PER_CHUNK) &&
+           (facs->bytes_per_sample == 2) &&
+           (facs->encoding_flags & FACS_ENCODING_FLAGS_SAMPLE_INTERPOLATION_PADDING));
+    
     loaded->streaming_data = *location;
     loaded->chunk_count = facs->chunk_count;
     loaded->channel_count = facs->channel_count;
@@ -416,7 +421,7 @@ THREAD_JOB_PROC(entire_sound_update) {
 
 s16 *Implicit_Context::update_audio(Audio_Info *audio, const s32 samples_to_play, const f32 dt) {
     TIME_BLOCK;
-    Memory_Block_Frame _mbf = Memory_Block_Frame(&temporary_memory);
+    SCOPE_MEMORY(&temporary_memory);
     
     const s32 core_count = audio->core_count;
     

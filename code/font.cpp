@@ -736,7 +736,7 @@ void Implicit_Context::text_update(Text_Info *info, Rendering_Info *render_info)
     }
     
     { // Rasterizing missing glyphs.
-        Memory_Block_Frame _mbf = Memory_Block_Frame(&temporary_memory);
+        SCOPE_MEMORY(&temporary_memory); //Scoped_Memory _ = Scoped_Memory(&temporary_memory);
         const s16 request_count = info->raster_requests.count;
         const v2s16 atlas_dim = V2S16(GLYPH_ATLAS_SIZE);
         const f32 inv_atlas_width  = 1.0f / (f32)atlas_dim.x;

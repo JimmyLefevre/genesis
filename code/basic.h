@@ -278,18 +278,19 @@ struct Memory_Block {
     usize size;
     usize used;
 };
-struct Memory_Block_Frame {
+struct Scoped_Memory {
     Memory_Block *block;
     usize watermark;
     
-    Memory_Block_Frame(Memory_Block *block) {
+    Scoped_Memory(Memory_Block *block) {
         this->block = block;
         this->watermark = block->used;
     }
-    ~Memory_Block_Frame() {
+    ~Scoped_Memory() {
         block->used = watermark;
     }
 };
+#define SCOPE_MEMORY(block) Scoped_Memory LINE_VAR(_scoped_memory) = Scoped_Memory((block))
 
 static void *push_size(Memory_Block *block, usize size, const u32 align = 4) {
     ASSERT(align); // No align should be align = 1.
@@ -330,10 +331,20 @@ iteration_step(structure, &_iterator##suffix))
 #define FOR_NAMED(structure, it_name) _FOR(structure, __LINE__, it_name)
 #define FOR(structure) FOR_NAMED(structure, it)
 
-#define FORI_TYPED_NAMED(type, i_name, low, high) for(type i_name = low; i_name < high; ++i_name)
+#define FORI_TYPED_NAMED(type, i_name, low, high) for(type i_name = (low); (i_name) < (high); ++i_name)
 #define FORI_NAMED(i_name, low, high) FORI_TYPED_NAMED(ssize, i_name, low, high)
 #define FORI_TYPED(type, low, high) FORI_TYPED_NAMED(type, i, low, high)
 #define FORI(low, high) FORI_NAMED(i, low, high)
+
+// @Untested
+#define _MIRROR_VARIABLE(struct_name, type, mirror_name, source_name) type mirror_name = source_name; struct{struct s{type *mirror;type *source;~s(){*s.source = *s.mirror;}};} struct_name;struct_name.s.mirror = &mirror_name;struct_name.s.source = &source_name;
+#define MIRROR_VARIABLE(type, name, source) _MIRROR_VARIABLE(LINE_VAR(_mirror_variable), type, name, source)
+
+#define CAST(type, expr) ((type)(expr))
+
+#define readonly const
+#define INPUT(name, source) auto name = (source)
+#define OUTPUT(expr, dest) (dest) = (expr)
 
 // Any
 

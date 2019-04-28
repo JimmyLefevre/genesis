@@ -189,13 +189,16 @@ void Implicit_Context::profile_update(Profiler *profiler, Program_State *program
                     }
                     
                     if(BUTTON_PRESSED(in, attack)) {
-                        
+                        // Toggle selection.
                         if(profiler->selected_frame == i) {
                             profiler->selected_frame = -1;
                         } else {
                             profiler->selected_frame = i;
                         }
-                    }
+                    } else if(BUTTON_DOWN(in, attack) && (profiler->selected_frame != -1)) {
+                        // Slide our selection with the cursor.
+                        profiler->selected_frame = i;
+                    } 
                 } else if(i == current_frame_index) {
                     color = red;
                 }
@@ -242,7 +245,7 @@ void Implicit_Context::profile_update(Profiler *profiler, Program_State *program
     s16 *sort_indices = push_array(&temporary_memory, s16, DEBUG_TIMERS_PER_CPU);
     
     for(s16 ithread = 0; ithread < profiler->thread_count; ++ithread) {
-        Memory_Block_Frame _mbf = Memory_Block_Frame(&temporary_memory);
+        SCOPE_MEMORY(&temporary_memory);
         
         s64 queue_to_display;
         if(profiler->selected_frame == -1) {

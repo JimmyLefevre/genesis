@@ -440,6 +440,6 @@ struct Text_Info {
     } glyph_atlas_lines;
     
     Glyph_Hash glyph_hash;
-    Hashed_Glyph_Additional_Data glyph_hash_auxiliary[GLYPH_HASH_SIZE]; // Parallel glyph_hash.items
-    Glyph_Visual_Data glyph_hash_visual[GLYPH_HASH_SIZE]; // Parallel glyph_hash.items
+    Hashed_Glyph_Additional_Data glyph_hash_auxiliary[GLYPH_HASH_SIZE]; // ;Parallel:glyph_hash.items
+    Glyph_Visual_Data glyph_hash_visual[GLYPH_HASH_SIZE]; // ;Parallel:glyph_hash.items
 };

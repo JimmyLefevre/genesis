@@ -2,9 +2,10 @@
 //
 // CURRENT:
 //
-Profiler interface:
-- Easier scrolling.
-- Add a way to revert our selection to the current frame.
+Compression:
+- Audio: Make a fast MDCT based on our FFT.
+-   Make FACS interpolation padding take the last sample's place instead of being appended to the chunk.
+- Textures.
 Start managing assets:
 - We need to change the currently-playing music when loading a new level.
 

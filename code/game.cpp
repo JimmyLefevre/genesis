@@ -1201,7 +1201,7 @@ void Implicit_Context::files_convert_wav_to_facs(string *wav_names, s32 file_cou
     string asset_directory = os_platform.debug_asset_directory;
     
     for(s32 ifile = 0; ifile < file_count; ++ifile) {
-        Memory_Block_Frame _mbf = Memory_Block_Frame(&temporary_memory);
+        SCOPE_MEMORY(&temporary_memory);
         string wav_name = concat(&temporary_memory, asset_directory, wav_names[ifile]);
         
         Sound_Asset wav_file = load_wav(wav_name);
@@ -1301,14 +1301,14 @@ void Implicit_Context::files_convert_wav_to_facs(string *wav_names, s32 file_cou
 }
 
 string Implicit_Context::files_convert_bmp_to_ta(string *bmp_names, v2 *bmp_halfdims, v2 *bmp_offsets, u32 file_count, Memory_Block *temp_block) {
-    Memory_Block_Frame __mbf = Memory_Block_Frame(&temporary_memory);
+    SCOPE_MEMORY(&temporary_memory);
     string asset_directory = os_platform.debug_asset_directory;
     
     Loaded_BMP *bmps = push_array(temp_block, Loaded_BMP, file_count);
     v2s16 *rect_dims = push_array(temp_block, v2s16, file_count);
     
     for(u32 ibmp = 0; ibmp < file_count; ++ibmp) {
-        Memory_Block_Frame _mbf = Memory_Block_Frame(&temporary_memory);
+        SCOPE_MEMORY(&temporary_memory);
         
         string bmp_name = concat(&temporary_memory, asset_directory, bmp_names[ibmp]);
         Loaded_BMP bmp = load_bmp(bmp_name);
@@ -1411,6 +1411,37 @@ void ta_to_texture_ids(string ta, Rendering_Info *render_info, Texture_ID *out_i
     u8 *texture = (u8 *)(file_framings + header.texture_count);
     
     render_add_atlas(render_info, texture, header.atlas_width, header.atlas_height, header.texture_count, file_framings, out_ids);
+}
+
+// @Cleanup
+static unsigned int stb_bit_reverse(unsigned int n)
+{
+    n = ((n & 0xAAAAAAAA) >>  1) | ((n & 0x55555555) << 1);
+    n = ((n & 0xCCCCCCCC) >>  2) | ((n & 0x33333333) << 2);
+    n = ((n & 0xF0F0F0F0) >>  4) | ((n & 0x0F0F0F0F) << 4);
+    n = ((n & 0xFF00FF00) >>  8) | ((n & 0x00FF00FF) << 8);
+    return (n >> 16) | (n << 16);
+}
+
+// this is a weird definition of log2() for which log2(1) = 1, log2(2) = 2, log2(4) = 3
+// as required by the specification. fast(?) implementation from stb.h
+// @OPTIMIZE: called multiple times per-packet with "constants"; move to setup
+static int ilog(s32 n)
+{
+    static signed char log2_4[16] = { 0,1,2,2,3,3,3,3,4,4,4,4,4,4,4,4 };
+    
+    if (n < 0) return 0; // signed n returns 0
+    
+    // 2 compares if n < 16, 3 compares otherwise (4 if signed or n > 1<<29)
+    if (n < (1 << 14))
+        if (n < (1 <<  4))            return  0 + log2_4[n      ];
+    else if (n < (1 <<  9))       return  5 + log2_4[n >>  5];
+    else                     return 10 + log2_4[n >> 10];
+    else if (n < (1 << 24))
+        if (n < (1 << 19))       return 15 + log2_4[n >> 15];
+    else                     return 20 + log2_4[n >> 20];
+    else if (n < (1 << 29))       return 25 + log2_4[n >> 25];
+    else                     return 30 + log2_4[n >> 30];
 }
 
 GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
@@ -1832,7 +1863,7 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
                 STRING("fonts/Charter Regular.ttf"),
             };
             
-            Memory_Block_Frame _mbf = Memory_Block_Frame(&temporary_memory);
+            SCOPE_MEMORY(&temporary_memory);
             
             for(s32 ifont = 0; ifont < ARRAY_LENGTH(font_names); ++ifont) {
                 string font_full_path = concat(&temporary_memory, os_platform.debug_asset_directory,
@@ -1850,6 +1881,282 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
             };
             const usize wav_file_count = ARRAY_LENGTH(wav_files);
             files_convert_wav_to_facs(wav_files, ARRAY_LENGTH(wav_files), game_block, data_files + data_file_count);
+            
+            //
+            //
+            // @Temporary
+            // Audio compression research
+            //
+            //
+            {
+                string facs_file = data_files[data_file_count];
+                string compressed = push_string(game_block, facs_file.length);
+                auto *header = (FACS_Header *)facs_file.data;
+                ssize bytes_per_chunk = header->chunk_size + (header->encoding_flags & 1) * header->bytes_per_sample;
+                ssize samples_per_chunk = bytes_per_chunk / header->bytes_per_sample;
+                
+                f32 *scratch = push_array(game_block, f32, samples_per_chunk * 4);
+                zero_mem(scratch, sizeof(f32) * (samples_per_chunk - 1));
+                
+                *(FACS_Header *)compressed.data = *header;
+                usize written = sizeof(FACS_Header);
+                
+                // @Cleanup: See todo.txt.
+                ssize actual_samples_per_chunk = samples_per_chunk - 1;
+                
+                ssize no_filter_error = 0;
+                ssize delta_error = 0;
+                ssize gradient_error = 0;
+                ssize tri_error = 0;
+                FORI_NAMED(chunk_index, 2, header->chunk_count) {
+                    FORI_NAMED(channel_index, 0, header->channel_count) {
+                        s16 *chunk_samples = ((s16 *)(header + 1)) + samples_per_chunk * (chunk_index * header->channel_count) + 
+                            samples_per_chunk * channel_index;
+                        
+                        s16 *output_samples = (s16 *)(compressed.data + written);
+                        
+                        union {
+                            s16 _s16[8];
+                            __m128i _m128;
+                        } last = {};
+                        FORI(0, samples_per_chunk) {
+                            s16 current = chunk_samples[i];
+                            output_samples[i] = current - (last._s16[0] << 1) + last._s16[1];
+                            
+                            no_filter_error += s_abs(current);
+                            delta_error += s_abs(current - last._s16[0]);
+                            gradient_error += s_abs(current - (last._s16[0] << 1) + last._s16[1]);
+                            tri_error += s_abs(current - (last._s16[0]) + (last._s16[1] * 3) - (last._s16[2]));
+                            
+                            last._m128 = _mm_slli_si128(last._m128, 2);
+                            last._s16[0] = current;
+                        }
+                        
+#if 0
+                        // Slow MDCT:
+                        const ssize n = actual_samples_per_chunk;
+                        const ssize N = actual_samples_per_chunk >> 1;
+                        const f32 pi_over_2N = PI / (f32)(N << 1);
+                        const f32 N_plus_one_over_two = ((f32)N + 1.0f) * 0.5f;
+                        FORI_NAMED(out, 0, samples_per_chunk >> 1) {
+                            const f32 out_plus_one = 2.0f * (f32)out + 1.0f;
+                            f32 acc = 0.0f;
+                            FORI_NAMED(in, 0, samples_per_chunk) {
+                                f32 angle = pi_over_2N * ((f32)in + N_plus_one_over_two) * out_plus_one;
+                                
+                                angle = f_mod(angle, PI * 2.0f);
+                                acc += (f32)chunk_samples[in] * f_cos(angle);
+                            }
+                            scratch[out] = acc;
+                        }
+#else
+                        // Fast MDCT
+                        // MDCT preparation:
+                        f32 *u = scratch;
+                        
+                        ssize n = (s32)actual_samples_per_chunk;
+                        const ssize _3n_over_4 = (n * 3) >> 2;
+                        FORI(0, n >> 2) {
+                            u[i] = -(f32)chunk_samples[i + _3n_over_4];
+                        }
+                        FORI(n >> 2, n) {
+                            u[i] = (f32)chunk_samples[i - (n >> 2)];
+                        }
+                        
+                        // Twiddle factors:
+                        f32 *A = push_array(game_block, f32, actual_samples_per_chunk);
+                        f32 *B = push_array(game_block, f32, actual_samples_per_chunk);
+                        f32 *C = push_array(game_block, f32, actual_samples_per_chunk);
+                        
+                        FORI(0, n >> 2) {
+                            A[(i << 1)  ] = (float)  f_cos(f_mod(4*i*PI/n, 2.0f * PI));
+                            A[(i << 1)+1] = (float) -f_sin(f_mod(4*i*PI/n, 2.0f * PI));
+                            B[(i << 1)  ] = (float)  f_cos(f_mod(((i << 1)+1)*PI/n/2, 2.0f * PI));
+                            B[(i << 1)+1] = (float)  f_sin(f_mod(((i << 1)+1)*PI/n/2, 2.0f * PI));
+                        }
+                        FORI(0, n >> 3) {
+                            C[(i << 1)  ] = (float)  f_cos(f_mod(2*((i << 1)+1)*PI/n, 2.0f * PI));
+                            C[(i << 1)+1] = (float) -f_sin(f_mod(2*((i << 1)+1)*PI/n, 2.0f * PI));
+                        }
+                        
+                        // Kernel:
+                        
+                        // Step 1
+                        FORI(0, n >> 2) {
+                            const ssize four_k = i << 2;
+                            const f32 A2k      = A[i << 1];
+                            const f32 A2kplus1 = A[(i << 1) + 1];
+                            const f32 u4k_minus_unminus4kminus1      = u[four_k    ] - u[n - four_k - 1];
+                            const f32 u4kplus2_minus_unminus4kminus3 = u[four_k + 2] - u[n - four_k - 3];
+                            
+                            u[n - four_k - 1] = (u4k_minus_unminus4kminus1 * A2k) -
+                                (u4kplus2_minus_unminus4kminus3 * A2kplus1);
+                            u[n - four_k - 3] = (u4k_minus_unminus4kminus1 * A2kplus1) +
+                                (u4kplus2_minus_unminus4kminus3 * A2k);
+                        }
+                        
+                        
+                        // Step 2
+                        FORI(0, n >> 3) {
+                            const ssize four_k = i << 2;
+                            const ssize nover2_plus_4k  = (n >> 1) + four_k;
+                            const ssize nover2_minus_4k = (n >> 1) - four_k;
+                            const f32 Anover2_minus_4_minus_4k = A[n/2 - 4 - four_k];
+                            const f32 Anover2_minus_3_minus_4k = A[n/2 - 3 - four_k];
+                            
+                            const f32 v_fourkplus1 = u[four_k + 1];
+                            const f32 v_fourkplus3 = u[four_k + 3];
+                            const f32 v_nover2plus3plus4k = u[nover2_plus_4k + 3];
+                            const f32 v_nover2plus1plus4k = u[nover2_plus_4k + 1];
+                            
+                            u[nover2_plus_4k + 3] = v_nover2plus3plus4k + v_fourkplus3;
+                            u[nover2_plus_4k + 1] = v_nover2plus1plus4k + v_fourkplus1;
+                            u[four_k + 3] = (v_nover2plus3plus4k - v_fourkplus3) * Anover2_minus_4_minus_4k - 
+                                (v_nover2plus1plus4k - v_fourkplus1) * Anover2_minus_3_minus_4k;
+                            u[four_k + 1] = (v_nover2plus1plus4k - v_fourkplus1) * Anover2_minus_4_minus_4k + 
+                                (v_nover2plus3plus4k - v_fourkplus3) * Anover2_minus_3_minus_4k;
+                        }
+                        
+                        // Step 3
+                        s32 ld; // log2(n)
+                        
+                        bitscan_forward(n, &ld);
+                        FORI_NAMED(l, 0, ld - 3) {
+                            const ssize k0 = n >> (l + 2);
+                            const ssize k1 = (ssize)1 << (l + 3);
+                            
+                            FORI_NAMED(r, 0, n >> (l + 4)) {
+                                const ssize four_r = r << 2;
+                                FORI_NAMED(s, 0, (ssize)1 << (l + 1)) {
+                                    const ssize two_s = s << 1;
+                                    const f32 Ark1        = A[r * k1];
+                                    const f32 Ark1_plus_1 = A[r * k1 + 1];
+                                    const f32 w0 = u[n - 1 - k0 * two_s       - four_r];
+                                    const f32 w1 = u[n - 1 - k0 * (two_s + 1) - four_r];
+                                    const f32 w2 = u[n - 3 - k0 * two_s       - four_r];
+                                    const f32 w3 = u[n - 3 - k0 * (two_s + 1) - four_r];
+                                    
+                                    u[n - 1 - k0 * two_s - four_r] = w0 + w1;
+                                    u[n - 3 - k0 * two_s - four_r] = w2 + w3;
+                                    
+                                    u[n - 1 - k0 * (two_s + 1) - four_r] = (w0 - w1) * Ark1 - (w2 - w3) * Ark1_plus_1;
+                                    u[n - 3 - k0 * (two_s + 1) - four_r] = (w2 - w3) * Ark1 + (w0 - w1) * Ark1_plus_1;
+                                }
+                            }
+                        }
+                        
+                        // Step 4
+                        FORI(1, (n >> 3) - 1) {
+                            // stb_vorbis uses ld - 3???
+                            const ssize j = bit_reverse(i, ld - 3);
+                            if(i < j) {
+                                const ssize _8j = (j << 3);
+                                const ssize _8i = (i << 3);
+                                
+                                const f32 u0 = u[_8i + 1];
+                                const f32 u1 = u[_8j + 1];
+                                const f32 u2 = u[_8i + 3];
+                                const f32 u3 = u[_8j + 3];
+                                const f32 u4 = u[_8i + 5];
+                                const f32 u5 = u[_8j + 5];
+                                const f32 u6 = u[_8i + 7];
+                                const f32 u7 = u[_8j + 7];
+                                
+                                u[_8j + 1] = u0;
+                                u[_8i + 1] = u1;
+                                u[_8j + 3] = u2;
+                                u[_8i + 3] = u3;
+                                u[_8j + 5] = u4;
+                                u[_8i + 5] = u5;
+                                u[_8j + 7] = u6;
+                                u[_8i + 7] = u7;
+                            }
+                        }
+                        
+                        // Step 5
+                        FORI(0, n >> 1) {
+                            u[i] = u[(i << 1) + 1];
+                        }
+                        
+                        // Step 6
+                        FORI(0, n >> 3) {
+                            const ssize _2k = i << 1;
+                            const ssize _4k = i << 2;
+                            const f32 w0 = u[_4k];
+                            const f32 w1 = u[_4k + 1];
+                            const f32 w2 = u[_4k + 2];
+                            const f32 w3 = u[_4k + 3];
+                            
+                            u[n - 1 - _2k] = w0;
+                            u[n - 2 - _2k] = w1;
+                            u[((n * 3) >> 2) - 1 - _2k] = w2;
+                            u[((n * 3) >> 2) - 2 - _2k] = w3;
+                        }
+                        
+                        // Step 7
+                        FORI(0, n >> 3) {
+                            const ssize _2k      = i << 1;
+                            const ssize n_over_2 = n >> 1;
+                            const f32 C2k      = C[_2k];
+                            const f32 C2kplus1 = C[_2k + 1];
+                            
+                            const f32 u0 = u[n_over_2 + _2k    ];
+                            const f32 u1 = u[n_over_2 + _2k + 1];
+                            const f32 u2 = u[n - 2    - _2k    ];
+                            const f32 u3 = u[n - 2    - _2k + 1];
+                            const f32 u4 = u[n - 1    - _2k    ];
+                            
+                            
+                            u[n_over_2 + _2k]     = (u0 + u2 +
+                                                     C2kplus1 * (u0 - u2) +
+                                                     C2k * (u1 + u3)) * 0.5f;
+                            u[n_over_2 + _2k + 1] = (u1 - u4 +
+                                                     C2kplus1 * (u1 + u4) -
+                                                     C2k * (u0 - u2)) * 0.5f;
+                            u[n - 2 - _2k] = (u0 + u2 -
+                                              C2kplus1 * (u0 - u2) -
+                                              C2k * (u1 + u3)) * 0.5f;
+                            u[n - 1 - _2k] = (-u1 + u4 +
+                                              C2kplus1 * (u1 + u4) -
+                                              C2k * (u0 - u2)) * 0.5f;
+                        }
+                        
+                        // Step 8
+                        FORI(0, n >> 2) {
+                            const f32 B2k      = B[i << 1];
+                            const f32 B2kplus1 = B[2 * i + 1];
+                            const f32 v0 = u[(i << 1) + (n >> 1)];
+                            const f32 v1 = u[(i << 1) + (n >> 1) + 1];
+                            
+                            u[i] = v0 * B2k + v1 * B2kplus1;
+                            u[(n >> 1) - 1 - i] = v0 * B2kplus1 - v1 * B2k;
+                        }
+#endif
+                        
+#if 0
+                        {
+                            SCOPE_MEMORY(game_block);
+                            string output = push_string(game_block, 30 + 50 * samples_per_chunk);
+                            usize printed = 0;
+                            printed += print(output.data + printed, output.length - printed, "Some title\n");
+                            output.length = printed;
+                            os_platform.write_entire_file(STRING("blah"), output);
+                        }
+#endif
+                        __debugbreak();
+                    }
+                }
+                
+                
+                usize final_compressed_size = facs_file.length;
+                os_platform.print(tprint("File size: %u -> %u (%f%%).\n",
+                                         facs_file.length,
+                                         final_compressed_size,
+                                         ((f64)facs_file.length / (f64)final_compressed_size * 100.0)));
+                program_state->should_close = true;
+            }
+            
+            
             data_file_count += wav_file_count;
         }
         
@@ -2303,7 +2610,7 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
             
             u32 frames = 0;
             while((this_frame_sim_time + PHYSICS_DT) <= sim_dt) {
-                Memory_Block_Frame _tm = Memory_Block_Frame(&temporary_memory);
+                SCOPE_MEMORY(&temporary_memory);
                 
                 // Server frame: actual simulation.
                 g_full_update(&g_cl->g, &game_input, PHYSICS_DT, audio_info, &g_cl->assets.datapack);
