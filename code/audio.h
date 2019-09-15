@@ -1,11 +1,10 @@
 
-#define SAMPLES_PER_CHUNK 65537
-#define UNPADDED_SAMPLES_PER_CHUNK 65536
+#define SAMPLES_PER_CHUNK 65536
 #define MAX_SOUND_COUNT 256
 // @Hardcoded: We probably want to pass this and AUDIO_HZ at runtime?
 #define AUDIO_BUFFER_SIZE 44100
 #define PLAYING_SOUND_HANDLE_BITFIELD_SIZE (IDIV_ROUND_UP(MAX_SOUND_COUNT, 64))
-#define AUDIO_PAGE_SIZE UNPADDED_SAMPLES_PER_CHUNK
+#define AUDIO_PAGE_SIZE SAMPLES_PER_CHUNK
 #define MAX_MUSIC_COUNT 4
 
 enum Sound_Uid {
@@ -28,7 +27,8 @@ struct Play_Cursor {
 
 struct Loaded_Sound {
     Asset_Location streaming_data;
-    s32 chunk_count;
+    u64 *chunk_offsets_in_file;
+    s32 chunks_per_channel;
     u8 channel_count;
 };
 
@@ -113,6 +113,10 @@ struct Audio_Info {
     f32 **mix_buffers; // f32[channel_count][audio_buffer_size]
     s16 *out_buffer; // s16[audio_buffer_size]
     
+    // @Cleanup @Temporary :DatapackRefactor
+    u64 chunk_offset_pool[MAX_SOUND_COUNT * 4096];
+    s32 used_chunk_offsets;
+    
     Loaded_Sound_Array loads;
     
     s16 *audio_pages[MAX_SOUND_COUNT * 2];
@@ -156,6 +160,7 @@ struct Audio_Info {
     volatile s32 load_syncs[MAX_MUSIC_COUNT + 1];
     
 #if GENESIS_DEV
+    // This is to make sure the sound update doesn't take up more than a full frame.
     bool being_updated;
 #endif
 };

@@ -139,26 +139,35 @@ struct Game_Client {
     Asset_Storage assets;
 };
 
-struct Game_Clock {
-    f64 cur_time;
-    f64 sim_time;
-};
-
 struct Entire_Sound_Update_Payload {
     Audio_Info *audio;
     f32 dt;
 };
 
+
+struct Draw_Game_Threaded_Payload {
+    Renderer* renderer;
+    Game* g;
+    Asset_Storage* assets;
+};
+
+struct Render_Vertex;
 struct Game_Block_Info {
     Game_Client client;
-    Rendering_Info render_info;
+    Renderer renderer;
     Audio_Info audio;
     Text_Info text;
-    Game_Clock clock;
+    f64 sim_time;
     Log log;
-    Menu menu;
+    Synth synth;
     
     Entire_Sound_Update_Payload sound_update_payload;
+    
+    Draw_Game_Threaded_Payload *draw_game_threaded_payload;
+    
+    Mesh_Editor mesh_editor;
+    
+    u16 edit_mesh;
     
 #if GENESIS_DEV
     Profiler profiler;

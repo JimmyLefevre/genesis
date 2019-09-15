@@ -97,8 +97,6 @@ struct Menu_Page {
 };
 
 struct Menu {
-    Memory_Block block;
-    
     Interaction interaction;
     Interaction hover;
     

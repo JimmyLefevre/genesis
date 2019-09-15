@@ -1,21 +1,59 @@
 
-#include "basic.h"
-#if OS_WINDOWS
 extern "C" {
-#include "dll_nocrt.c"
+    int _fltused = 0x9875;
+    
+    // As far as I understand it, this procedure is called whenever the DLL is loaded (ie. when LoadLibrary
+    // is called) in order to set up global constructors or whatever.
+    // From MSDN: "When a DLL is loaded using LoadLibrary, existing threads do not call the entry-point function of the newly loaded DLL."
+    // https://msdn.microsoft.com/en-us/library/windows/desktop/ms682583(v=vs.85).aspx
+    int _DllMainCRTStartup() {
+        return 1;
+    }
 }
-#endif
 
-#include "game_headers.h"
+#include              "basic.h"
+#include          "bitpacker.h"
+#include                "sse.h"
+#include               "keys.h"
+#include               "math.h"
+#include          "utilities.h"
+#include             "string.h"
+#include                "log.h"
+#include            "profile.h"
+#include                "bmp.h"
+#include              "input.h"
+#include               "font.h"
+#include             "assets.h"
+#include              "audio.h"
+#include              "synth.h"
+#include   "compression_fast.h"
+// #include               "menu.h"
+#include         "render_new.h"
+#include               "mesh.h"
+#include               "game.h"
+#include       "game_context.h"
+#include         "interfaces.h"
 
-#include "game_context.h"
-#include "interfaces.h"
 static os_function_interface os_platform;
 static Log *global_log;
 
-#include "game_code.cpp"
+#include        "bitpacker.cpp"
+#include            "print.cpp"
+#include           "string.cpp"
+#include              "log.cpp"
+#include              "bmp.cpp"
+#include            "input.cpp"
+// #include             "font.cpp"
+#include       "render_new.cpp"
+#include             "mesh.cpp"
+#include           "assets.cpp"
+#include            "audio.cpp"
+#include            "synth.cpp"
+#include "compression_fast.cpp"
+// #include             "menu.cpp"
+// #include          "profile.cpp"
 
-inline v2 unit_scale_to_world_space_offset(v2 p, f32 camera_zoom) {
+static inline v2 unit_scale_to_world_space_offset(v2 p, f32 camera_zoom) {
     v2 result = p - V2(0.5f);
     f32 inv_camera_zoom = 1.0f / camera_zoom;
     result.x *= GAME_ASPECT_RATIO_X * inv_camera_zoom;
@@ -23,7 +61,7 @@ inline v2 unit_scale_to_world_space_offset(v2 p, f32 camera_zoom) {
     return result;
 }
 
-inline v2 rotate_around(v2 p, v2 center, v2 rotation) {
+static inline v2 rotate_around(v2 p, v2 center, v2 rotation) {
     v2 rel = p - center;
     v2 result = v2_complex_prod(rel, rotation);
     return (p + result);
@@ -1049,7 +1087,79 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
     advance_input(_in);
 }
 
-void Implicit_Context::draw_game(Rendering_Info *render_info, Game *g, Asset_Storage *assets) {
+THREAD_JOB_PROC(draw_game_threaded) {
+#if 0 // @XXX
+    // Begin
+    auto payload = CAST(Draw_Game_Threaded_Payload*, data);
+    auto render  = CAST(Render_Thread_Payload*, &payload->render);
+    
+    auto renderer = payload->renderer;
+    
+    s32 render_threads = renderer->core_count;
+    
+    s32 batch_index = 0;
+    Command_Batch* current_batch = &render->command_batches[batch_index];
+    Render_Vertex* vertex_buffer = CAST(Render_Vertex*, current_batch->list->vertex_buffer_memory);
+    s32 vert_count = 0;
+    s32 tri_count = 0;
+    
+    bool done = false;
+    while(!done) {
+        // Do some stuff
+#if 0
+        vertex_buffer[vert_count++] = make_render_vertex(V2(0.0f, 0.7f));
+        vertex_buffer[vert_count++] = make_render_vertex(V2(-0.4f, -0.5f));
+        vertex_buffer[vert_count++] = make_render_vertex(V2( 0.4f, -0.5f));
+#endif
+        
+        done = true;
+        
+        if((vert_count == 3) || done) {
+            // Queue up the batch.
+            s32 queued = ATOMIC_INC32(CAST(volatile long*, &renderer->command_batches_queued));
+            if(!(queued % render_threads)) { 
+                // Flush.
+                // This also increases some batch_index waitable value.
+                
+                // @Hardcoded
+                os_platform.submit_commands(current_batch->list, &vert_count, 1, false);
+                renderer->command_flushes += 1;
+            }
+            
+            if(!done) {
+                // In any case, flip our current batch.
+                batch_index += 1;
+                current_batch = &render->command_batches[batch_index & 1];
+                vertex_buffer = CAST(Render_Vertex*, current_batch->list->vertex_buffer_memory);
+                vert_count = 0;
+                
+                // We also need to wait for it to be free again, just in case we finish 2 batches
+                // before some other thread gets to finish 1.
+                
+                // This is an example of doing this:
+                // os_platform->wait_for_submitted_batches_to_be_this_value(batch_index - 1);
+                // ... Where we would be waiting on an event.
+                
+                // This is another, admittedly dumb, way of doing this:
+                // while(renderer->command_flushes < batch_index - 1) {
+                //   ;
+                // }
+                // HOWEVER, events and waits are pretty heavyweight and probably slow, so they should
+                // only be used in a hypothetical worst case scenario.
+                // 
+                // A smarter way of going about this, then, is probably to do this:
+                // if(renderer->command_flushes < batch_index - 1) {
+                //   os_platform->wait_for_submitted_batches_to_be_this_value(batch_index - 1);
+                // }
+                // Where, hopefully, in 99.9% of cases, we just jump over the event mess.
+            }
+        }
+    }
+#endif
+}
+
+void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Game *g, Asset_Storage *assets) {
+#if 0
     TIME_BLOCK;
     if(g->current_level_index) {
         const u32 focused_player = g->current_player;
@@ -1064,15 +1174,17 @@ void Implicit_Context::draw_game(Rendering_Info *render_info, Game *g, Asset_Sto
         const v4 anti_partner_color = V4(0.0f, 0.0f, 1.0f, 1.0f);
         const v4 anti_all_color = anti_player_color + anti_partner_color;
         
-        Texture_ID blank_texture   = FIND_TEXTURE_ID(render_info, blank);
-        Texture_ID player_texture  = FIND_TEXTURE_ID(render_info, player);
-        Texture_ID hitbox_texture  = FIND_TEXTURE_ID(render_info, default_hitbox);
-        Texture_ID hurtbox_texture = FIND_TEXTURE_ID(render_info, default_hurtbox);
-        Texture_ID untexture       = FIND_TEXTURE_ID(render_info, untextured);
-        Texture_ID solid_texture   = FIND_TEXTURE_ID(render_info, default_solid);
+#if 0
+        Texture_Handle blank_texture   = GET_TEXTURE_ID(renderer, blank);
+        Texture_Handle player_texture  = GET_TEXTURE_ID(renderer, player);
+        Texture_Handle hitbox_texture  = GET_TEXTURE_ID(renderer, default_hitbox);
+        Texture_Handle hurtbox_texture = GET_TEXTURE_ID(renderer, default_hurtbox);
+        Texture_Handle untexture       = GET_TEXTURE_ID(renderer, untextured);
+        Texture_Handle solid_texture   = GET_TEXTURE_ID(renderer, default_solid);
+#endif
         
-        queue_shader(render_info, SHADER_INDEX_TEXTURE);
-        queue_transform_game_camera(render_info, camera_p, camera_dir, camera_zoom);
+        render_set_shader_texture_rgba(renderer);
+        render_set_transform_game_camera(renderer, camera_p, camera_dir, camera_zoom);
         
         { // Players
             const v4 color = V4(0.0f, 1.0f, 1.0f, 1.0f);
@@ -1082,7 +1194,7 @@ void Implicit_Context::draw_game(Rendering_Info *render_info, Game *g, Asset_Sto
                 const v2 p = g->players.ps[i];
                 const v2 halfdim = V2(PLAYER_HALFWIDTH, PLAYER_HALFHEIGHT);
                 
-                queue_quad(render_info, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
+                render_quad(renderer, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
             }
         }
         
@@ -1093,7 +1205,7 @@ void Implicit_Context::draw_game(Rendering_Info *render_info, Game *g, Asset_Sto
                 const v2 p = g->partners.ps[i];
                 const v2 halfdim = V2(PARTNER_HALFWIDTH, PARTNER_HALFHEIGHT);
                 
-                queue_quad(render_info, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
+                render_quad(renderer, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
             }
         }
         
@@ -1105,7 +1217,7 @@ void Implicit_Context::draw_game(Rendering_Info *render_info, Game *g, Asset_Sto
                 const v2 p = g->trees.ps[i];
                 const v2 halfdim = V2(TREE_HALFWIDTH, TREE_HALFHEIGHT);
                 
-                queue_quad(render_info, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
+                render_quad(renderer, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
             }
         }
         
@@ -1117,7 +1229,7 @@ void Implicit_Context::draw_game(Rendering_Info *render_info, Game *g, Asset_Sto
                 const v2 p = g->turrets.ps[i];
                 const v2 halfdim = V2(TURRET_HALFWIDTH, TURRET_HALFHEIGHT);
                 
-                queue_quad(render_info, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
+                render_quad(renderer, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
             }
         }
         
@@ -1128,7 +1240,7 @@ void Implicit_Context::draw_game(Rendering_Info *render_info, Game *g, Asset_Sto
             FORI(0, count) {
                 const v2 p = g->bullets.ps[i];
                 
-                queue_circle_pradius(render_info, p, BULLET_RADIUS, color);
+                render_circle_prad(renderer, p, BULLET_RADIUS, color);
             }
         }
         
@@ -1139,7 +1251,7 @@ void Implicit_Context::draw_game(Rendering_Info *render_info, Game *g, Asset_Sto
             FORI(0, count) {
                 const v2 p = g->dogs.ps[i];
                 
-                queue_circle_pradius(render_info, p, DOG_RADIUS, color);
+                render_circle_prad(renderer, p, DOG_RADIUS, color);
             }
         }
         
@@ -1167,13 +1279,14 @@ void Implicit_Context::draw_game(Rendering_Info *render_info, Game *g, Asset_Sto
                         p,
                         p + wall_dir * ray_length,
                     };
-                    queue_line_strip(render_info, pts, ARRAY_LENGTH(pts), 0.01f, anti_partner_color);
+                    queue_line_strip(renderer, pts, ARRAY_LENGTH(pts), 0.01f, anti_partner_color);
                 }
                 
-                queue_quad(render_info, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
+                queue_quad(renderer, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
             }
         }
     }
+#endif
 }
 
 string Implicit_Context::tprint(char *literal, ...) {
@@ -1196,252 +1309,22 @@ THREAD_JOB_PROC(test_thread_job) {
     os_platform.print(jobstr);
 }
 
-#if GENESIS_BUILD_ASSETS_ON_STARTUP
-void Implicit_Context::files_convert_wav_to_facs(string *wav_names, s32 file_count, Memory_Block *temp_block, string *out_files) {
-    string asset_directory = os_platform.debug_asset_directory;
+static s32 *triangulate_polygon(Memory_Block *block, v2 *verts, s32 vert_count) {
+    s32 *vert_indices = push_array(block, s32, (vert_count - 2) * 3);
     
-    for(s32 ifile = 0; ifile < file_count; ++ifile) {
-        SCOPE_MEMORY(&temporary_memory);
-        string wav_name = concat(&temporary_memory, asset_directory, wav_names[ifile]);
+    // Dumb convex fan for now.
+    s32 i0 = 0;
+    s32 i1 = 1;
+    s32 index_count = 0;
+    FORI_TYPED(s32, 2, vert_count) {
+        vert_indices[index_count++] = i0;
+        vert_indices[index_count++] = i1;
+        vert_indices[index_count++] = i;
         
-        Sound_Asset wav_file = load_wav(wav_name);
-        const u32 samples_per_channel = wav_file.samplesPerChannel;
-        s16 *wav_uninterleaved_samples = push_array(temp_block, s16, wav_file.samplesPerChannel * wav_file.channelCount);
-        
-        u16 channel_count  = wav_file.channelCount;
-        s16 **in_channels  = (s16 **)push_array(temp_block, s16 *, channel_count);
-        s16 **out_channels = (s16 **)push_array(temp_block, s16 *, channel_count);
-        
-        for(u32 ichannel = 0; ichannel < channel_count; ++ichannel) {
-            s16 *in = wav_file.samples + ichannel;
-            s16 *out = wav_uninterleaved_samples + samples_per_channel * ichannel;
-            
-            for(u32 isample = 0; isample < samples_per_channel; ++isample) {
-                *out++ = *in;
-                in += channel_count;
-            }
-            
-            in_channels[ichannel] = in;
-            out_channels[ichannel] = out;
-        }
-        
-        {
-            FACS_Header header;
-            header.sample_rate = 44100;
-            header.channel_count = (u8)wav_file.channelCount;
-            header.bytes_per_sample = 2;
-            header.chunk_size = 65536;
-            u32 chunk_count = channel_count * (samples_per_channel + header.chunk_size - 1) / header.chunk_size;
-            ASSERT(chunk_count < U16_MAX);
-            // @Cleanup: Our audio system expects this division, so chunk_count is ambiguous in this scope.
-            header.chunk_count = (u16)chunk_count / channel_count;
-            header.encoding_flags = FACS_ENCODING_FLAGS_SAMPLE_INTERPOLATION_PADDING;
-            
-            u64 file_size = sizeof(FACS_Header) + header.chunk_size * header.chunk_count * header.channel_count * header.bytes_per_sample;
-            if(header.encoding_flags & FACS_ENCODING_FLAGS_SAMPLE_INTERPOLATION_PADDING) {
-                file_size += 2 * header.chunk_count * header.channel_count * header.bytes_per_sample;
-            }
-            string write_file;
-            write_file.length = file_size;
-            write_file.data = push_array(temp_block, u8, write_file.length);
-            zero_mem(write_file.data, write_file.length);
-            FACS_Header *out_header = (FACS_Header *)write_file.data;
-            *out_header = header;
-            
-            u32 chunks_left = header.chunk_count;
-            ASSERT(chunks_left);
-            s32 chunk_sample_count = header.chunk_size;
-            s16 *facs_samples = (s16 *)(out_header + 1);
-            s32 out_channel_stride = header.chunk_size;
-            if(header.encoding_flags & FACS_ENCODING_FLAGS_SAMPLE_INTERPOLATION_PADDING) {
-                ++out_channel_stride;
-            }
-            
-            for(u32 i = 0; i < channel_count; ++i) {
-                in_channels[i] = wav_uninterleaved_samples + i * samples_per_channel;
-                out_channels[i] = facs_samples + i * out_channel_stride;
-            }
-            
-            u32 zero_pad = chunk_sample_count * header.chunk_count - samples_per_channel;
-            do {
-                if(chunks_left == 1) {
-                    chunk_sample_count = samples_per_channel - chunk_sample_count * (header.chunk_count - 1);
-                    if(header.encoding_flags & FACS_ENCODING_FLAGS_SAMPLE_INTERPOLATION_PADDING) {
-                        ++chunk_sample_count;
-                    }
-                }
-                
-                for(u32 ichannel = 0; ichannel < channel_count; ++ichannel) {
-                    mem_copy(in_channels[ichannel], out_channels[ichannel], sizeof(s16) * chunk_sample_count);
-                }
-                
-                if(header.encoding_flags & FACS_ENCODING_FLAGS_SAMPLE_INTERPOLATION_PADDING) {
-                    for(u32 ichannel = 0; ichannel < channel_count; ++ichannel) {
-                        out_channels[ichannel][chunk_sample_count] = in_channels[ichannel][chunk_sample_count];
-                        // We're accounting for all of the padding bytes because
-                        // we're skipping over every channel at the end anyway.
-                        out_channels[ichannel] += channel_count;
-                    }
-                }
-                
-                --chunks_left;
-                for(u32 ichannel = 0; ichannel < channel_count; ++ichannel) {
-                    in_channels[ichannel]  += chunk_sample_count;
-                    out_channels[ichannel] += channel_count * chunk_sample_count;
-                }
-            } while(chunks_left);
-            
-            for(u32 ichannel = 0; ichannel < channel_count; ++ichannel) {
-                zero_mem(out_channels[ichannel], zero_pad);
-            }
-            
-            out_files[ifile] = write_file;
-        }
-    }
-}
-
-string Implicit_Context::files_convert_bmp_to_ta(string *bmp_names, v2 *bmp_halfdims, v2 *bmp_offsets, u32 file_count, Memory_Block *temp_block) {
-    SCOPE_MEMORY(&temporary_memory);
-    string asset_directory = os_platform.debug_asset_directory;
-    
-    Loaded_BMP *bmps = push_array(temp_block, Loaded_BMP, file_count);
-    v2s16 *rect_dims = push_array(temp_block, v2s16, file_count);
-    
-    for(u32 ibmp = 0; ibmp < file_count; ++ibmp) {
-        SCOPE_MEMORY(&temporary_memory);
-        
-        string bmp_name = concat(&temporary_memory, asset_directory, bmp_names[ibmp]);
-        Loaded_BMP bmp = load_bmp(bmp_name);
-        
-        v2s16 dim = V2S16((s16)(bmp.width + 2), (s16)(bmp.height + 2));
-        
-        bmps[ibmp] = bmp;
-        rect_dims[ibmp] = dim;
+        i1 = i;
     }
     
-    // @Incomplete: Adjust atlas dimensions based on BMPs' dimensions?
-    TA_Header header;
-    header.texture_count = (u16)file_count;
-    header.atlas_width = 1024;
-    header.atlas_height = 1024;
-    header.texture_encoding = 0;
-    
-    // 24 bytes per texture entry: 8 for ID, 8*2 for UVs.
-    u64 file_size = sizeof(TA_Header) + sizeof(Texture_Framing) * header.texture_count +
-        4 * header.atlas_width * header.atlas_height;
-    string write_file = make_string(push_array(temp_block, u8, file_size), file_size);
-    zero_mem(write_file.data, write_file.length);
-    
-    TA_Header *out_header = (TA_Header *)write_file.data;
-    *out_header = header;
-    
-    Texture_Framing *out_framings = (Texture_Framing *)(out_header + 1);
-    
-    v2s16 *rect_ps = push_array(temp_block, v2s16, file_count);
-    { // Packing.
-        ASSERT((header.atlas_width < S16_MAX) && (header.atlas_height < S16_MAX));
-        v2s16 target_dim = V2S16(header.atlas_width, header.atlas_height);
-        
-        s16 *line_lefts = push_array(&temporary_memory, s16, 256);
-        s16 *line_ys = push_array(&temporary_memory, s16, 256);
-        s16 line_count;
-        rect_pack_init(line_lefts, line_ys, &line_count, target_dim.x);
-        rect_pack(rect_dims, (s16)file_count, line_lefts, line_ys, &line_count,
-                  target_dim.x, target_dim.y, rect_ps);
-    }
-    
-    u32 *texture = (u32 *)(out_framings + file_count);
-    const f32 f_atlas_width = (f32)header.atlas_width;
-    const f32 f_atlas_height = (f32)header.atlas_height;
-    const f32 inv_atlas_width = 1.0f / f_atlas_width;
-    const f32 inv_atlas_height = 1.0f / f_atlas_height;
-    const f32 inv_255 = 1.0f / 255.0f;
-    for(u32 iuv = 0; iuv < file_count; ++iuv) {
-        Loaded_BMP bmp = bmps[iuv];
-        v2s16 rect_min = rect_ps[iuv] + V2S16(1, 1);
-        v2s16 rect_max = rect_ps[iuv] + rect_dims[iuv] - V2S16(1, 1);
-        
-        const s32 width = rect_max.x - rect_min.x;
-        const v2 uvmin = V2(((f32)rect_min.x) * inv_atlas_width,
-                            ((f32)rect_min.y) * inv_atlas_height);
-        const v2 uvmax = V2(((f32)rect_max.x) * inv_atlas_width,
-                            ((f32)rect_max.y) * inv_atlas_height);
-        
-        Texture_Framing framing;
-        framing.offset = bmp_offsets[iuv];
-        framing.halfdim = bmp_halfdims[iuv];
-        
-        for(s32 y = rect_min.y; y <= rect_max.y; ++y) {
-            const s32 yoffset = (y - rect_min.y) * width;
-            for(s32 x = rect_min.x; x <= rect_max.x; ++x) {
-                s32 itexel = yoffset + x - rect_min.x;
-                const u32 read_pixel = bmp.data[itexel];
-                
-                // Premultiplying alpha:
-                f32 r = (read_pixel & 0xFF) * inv_255;
-                f32 g = ((read_pixel >> 8) & 0xFF) * inv_255;
-                f32 b = ((read_pixel >> 16) & 0xFF) * inv_255;
-                f32 a = ((read_pixel >> 24) & 0xFF) * inv_255;
-                r *= a;
-                g *= a;
-                b *= a;
-                ASSERT((r >= 0.0f) && (r <= 1.0f));
-                ASSERT((g >= 0.0f) && (g <= 1.0f));
-                ASSERT((b >= 0.0f) && (b <= 1.0f));
-                ASSERT((a >= 0.0f) && (a <= 1.0f));
-                
-                u32 write_pixel = ((u32)(r * 255.0f)) | ((u32)(g * 255.0f) << 8) | 
-                    ((u32)(b * 255.0f) << 16) | ((u32)(a * 255.0f) << 24);
-                texture[y * header.atlas_width + x] = write_pixel;
-            }
-        }
-        
-        framing.uvs.min = uvmin;
-        framing.uvs.max = uvmax;
-        out_framings[iuv] = framing;
-    }
-    
-    return write_file;
-}
-#endif
-
-void ta_to_texture_ids(string ta, Rendering_Info *render_info, Texture_ID *out_ids) {
-    TA_Header header = *(TA_Header *)ta.data;
-    Texture_Framing *file_framings = (Texture_Framing *)(ta.data + sizeof(TA_Header));
-    u8 *texture = (u8 *)(file_framings + header.texture_count);
-    
-    render_add_atlas(render_info, texture, header.atlas_width, header.atlas_height, header.texture_count, file_framings, out_ids);
-}
-
-// @Cleanup
-static unsigned int stb_bit_reverse(unsigned int n)
-{
-    n = ((n & 0xAAAAAAAA) >>  1) | ((n & 0x55555555) << 1);
-    n = ((n & 0xCCCCCCCC) >>  2) | ((n & 0x33333333) << 2);
-    n = ((n & 0xF0F0F0F0) >>  4) | ((n & 0x0F0F0F0F) << 4);
-    n = ((n & 0xFF00FF00) >>  8) | ((n & 0x00FF00FF) << 8);
-    return (n >> 16) | (n << 16);
-}
-
-// this is a weird definition of log2() for which log2(1) = 1, log2(2) = 2, log2(4) = 3
-// as required by the specification. fast(?) implementation from stb.h
-// @OPTIMIZE: called multiple times per-packet with "constants"; move to setup
-static int ilog(s32 n)
-{
-    static signed char log2_4[16] = { 0,1,2,2,3,3,3,3,4,4,4,4,4,4,4,4 };
-    
-    if (n < 0) return 0; // signed n returns 0
-    
-    // 2 compares if n < 16, 3 compares otherwise (4 if signed or n > 1<<29)
-    if (n < (1 << 14))
-        if (n < (1 <<  4))            return  0 + log2_4[n      ];
-    else if (n < (1 <<  9))       return  5 + log2_4[n >>  5];
-    else                     return 10 + log2_4[n >> 10];
-    else if (n < (1 << 24))
-        if (n < (1 << 19))       return 15 + log2_4[n >> 15];
-    else                     return 20 + log2_4[n >> 20];
-    else if (n < (1 << 29))       return 25 + log2_4[n >> 25];
-    else                     return 30 + log2_4[n >> 30];
+    return vert_indices;
 }
 
 GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
@@ -1461,15 +1344,15 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
     global_log = &info->log;
     
     Game_Client    * const        g_cl = &info->client;
-    Rendering_Info * const render_info = &info->render_info;
+    
+    Renderer       * const    renderer = &info->renderer;
     Audio_Info     * const  audio_info = &info->audio;
     Text_Info      * const   text_info = &info->text;
-    Menu           * const        menu = &info->menu;
+    Synth          * const       synth = &info->synth;
     
     // Memory partitioning:
-    sub_block(&render_info->render_queue, game_block, KiB(128));
+    // sub_block(&renderer->render_queue, game_block, KiB(128));
     sub_block(&text_info->font_block    , game_block, MiB(  4));
-    sub_block(&menu->block              , game_block, KiB( 64));
     
     { // Loading the config file.
         bool need_to_load_default_config = true;
@@ -1483,8 +1366,7 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
                 if(config->version == USER_CONFIG_VERSION) {
                     logprint(global_log, STRING("Correct version config found. Loading."));
                     program_state->should_be_fullscreen = config->fullscreen;
-                    program_state->window_size[0] = config->window_dim.x;
-                    program_state->window_size[1] = config->window_dim.y;
+                    program_state->window_size = V2S(config->window_dim);
                     program_state->input_settings = config->input;
                     audio_info->current_volume    = config->volume;
                     
@@ -1526,66 +1408,18 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         }
     }
     
-    { // Audio.
-        const s32 output_hz       = program_state->audio_output_rate;
-        const s32 output_channels = program_state->audio_output_channels;
-        
-        // This should not necessarily be core_count. Rather, it should be the number of threads
-        // we want working at the same time on audio jobs.
-        audio_info->core_count = core_count;
-        
-        // Processing buffers:
-        audio_info->temp_buffer = push_array(game_block, f32  , output_hz      );
-        audio_info->mix_buffers = push_array(game_block, f32 *, output_channels);
-        for(s32 i = 0; i < output_channels; ++i) {
-            audio_info->mix_buffers[i] = push_array(game_block, f32, output_hz);
-        }
-        audio_info->out_buffer = push_array(game_block, s16, output_hz * output_channels);
-        audio_info->channel_count = (u8)output_channels;
-        init(&audio_info->loads, game_block);
-        
-        // Chunk buffers:
-        Audio_Page_Identifier bad_id;
-        bad_id.all = 0xFFFFFFFFFFFFFFFF;
-        for(s32 i = 0; i < MAX_SOUND_COUNT * 2; ++i) {
-            audio_info->audio_pages[i] = push_array(game_block, s16, AUDIO_PAGE_SIZE + 1);
-            audio_info->audio_page_ids[i] = bad_id;
-        }
-        
-        { // Threaded read bitfield:
-            Audio_Load_Queue **queues = push_array(game_block, Audio_Load_Queue *, core_count);
-            FORI(0, core_count) {
-                queues[i] = push_struct(game_block, Audio_Load_Queue, 64); // @Hardcoded cache line size
-            }
-            audio_info->load_queues = queues;
-            push_size(game_block, 0, 64);
-            
-            audio_info->last_gather_first_frees = push_array(game_block, s32, core_count);
-        }
-        
-        // We're assuming current_volume was initialised when loading the config.
-        audio_info->target_volume.master                            = audio_info->current_volume.master;
-        audio_info->target_volume.by_category[AUDIO_CATEGORY_SFX  ] = audio_info->current_volume.by_category[AUDIO_CATEGORY_SFX  ];
-        audio_info->target_volume.by_category[AUDIO_CATEGORY_MUSIC] = audio_info->current_volume.by_category[AUDIO_CATEGORY_MUSIC];
-        
-        // When we get to unloading sounds, be sure to reset these values to -1.
-        FORI(0, SOUND_UID_COUNT) {
-            audio_info->sounds_by_uid[i] = -1;
-        }
-        FORI(0, PLAYING_SOUND_HANDLE_BITFIELD_SIZE) {
-            audio_info->free_commands[i] = 0xFFFFFFFFFFFFFFFF;
-        }
-        FORI(0, MAX_SOUND_COUNT) {
-            audio_info->play_commands[i].old_volume = push_array(game_block, f32, output_channels);
-            audio_info->play_commands[i].volume = push_array(game_block, f32, output_channels);
-        }
-    }
+    // Audio.
+    
+    audio_init(audio_info, game_block, program_state->audio_output_rate, program_state->audio_output_channels, core_count);
+    
+    init_synth(synth, game_block, CAST(u8, core_count), CAST(u8, program_state->audio_output_channels), program_state->audio_output_rate);
+    
     
 #if GENESIS_DEV
     { // Profiler:
         Profiler profiler = {};
         
-        profile_init(&profiler, game_block, core_count);
+        // profile_init(&profiler, game_block, core_count);
         
         info->profiler = profiler;
         
@@ -1595,254 +1429,9 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
     }
 #endif
     
-    { // Menu.
-        Menu_Page *pages      = push_array(&menu->block, Menu_Page, 8);
-        s32        page_count = 0;
-        const rect2 main_rect = rect2_minmax(V2(0.0f), V2(1.0f));
-        
-        { // Audio slider page.
-            Menu_Page page = {};
-            rect2 ui_rect = main_rect;
-            f32 y_margin = 0.05f;
-            f32 x_margin = y_margin * GAME_ASPECT_RATIO;
-            ui_rect.  left += x_margin;
-            ui_rect. right -= x_margin;
-            ui_rect.bottom += y_margin;
-            ui_rect.   top -= y_margin;
-            
-            rect2      *slider_aabbs = push_array(&menu->block,      rect2, 8);
-            Slider     *sliders      = push_array(&menu->block,     Slider, 8);
-            s32         slider_count = 0;
-            
-            rect2      *button_aabbs = push_array(&menu->block,      rect2, 8);
-            Button     *buttons      = push_array(&menu->block,     Button, 8);
-            s32         button_count = 0;
-            
-            rect2      *toggle_aabbs = push_array(&menu->block,      rect2, 8);
-            Toggle     *toggles      = push_array(&menu->block,     Toggle, 8);
-            s32         toggle_count = 0;
-            
-            rect2    *dropdown_aabbs = push_array(&menu->block,      rect2, 8);
-            Dropdown *dropdowns      = push_array(&menu->block,   Dropdown, 8);
-            s32       dropdown_count = 0;
-            
-            Menu_Label *labels       = push_array(&menu->block, Menu_Label, 8);
-            s32         label_count  = 0;
-            
-            Dropdown_Option *dropdown_options = push_array(&menu->block, Dropdown_Option, 8);
-            s32              dropdown_option_count = 0;
-            
-            // @Duplication all of these label calls.
-            
-            add_slider(slider_aabbs, sliders, &slider_count, ui_rect,
-                       V2(0.2f, 0.50f), 1.0f, 0.1f, 0.0f, 1.0f, &audio_info->target_volume.master);
-            add_slider(slider_aabbs, sliders, &slider_count, ui_rect,
-                       V2(0.2f, 0.25f), 1.0f, 0.1f, 0.0f, 1.0f, &audio_info->target_volume.by_category[AUDIO_CATEGORY_SFX]);
-            add_slider(slider_aabbs, sliders, &slider_count, ui_rect,
-                       V2(0.2f, 0.10f), 1.0f, 0.1f, 0.0f, 1.0f, &audio_info->target_volume.by_category[AUDIO_CATEGORY_MUSIC]);
-            add_label(labels, &label_count, ui_rect,
-                      V2(0.0f, 0.50f + 0.1f), 0.065f, STRING("Volumes:"), FONT_REGULAR, false);
-            add_label(labels, &label_count, ui_rect,
-                      V2(0.0f, 0.50f),        0.03f, STRING("Master")  , FONT_REGULAR, false);
-            add_label(labels, &label_count, ui_rect,
-                      V2(0.0f, 0.25f),        0.03f, STRING("Effects") , FONT_REGULAR, false);
-            add_label(labels, &label_count, ui_rect,
-                      V2(0.0f, 0.10f),        0.03f, STRING("Music")   , FONT_REGULAR, false);
-            
-            add_label(labels, &label_count, ui_rect,
-                      V2(0.15f, 0.85f + 0.1f * 0.5f + 0.02f), 0.03f, STRING("Page 1"), FONT_REGULAR, true);
-            add_button(button_aabbs, buttons, &button_count, ui_rect,
-                       V2(0.15f, 0.85f), V2(0.1f), make_any32(1), (any32 *)&menu->current_page);
-            
-            add_label(labels, &label_count, ui_rect,
-                      V2(0.50f, 0.85f + 0.1f * 0.5f + 0.02f), 0.03f, STRING("Godmode?"), FONT_REGULAR, true);
-#if GENESIS_DEV
-            add_toggle(toggle_aabbs, toggles, &toggle_count, ui_rect,
-                       V2(0.50f, 0.85f), V2(0.1f), &g_cl->g.godmode);
-#endif
-            
-            {
-                Dropdown *dropdown = add_dropdown(dropdown_aabbs, dropdowns, &dropdown_count, ui_rect,
-                                                  V2(0.85f), V2(0.1f), 4, (any32 *)&menu->sliders_to_display,
-                                                  0, &menu->block);
-                add_label(labels, &label_count, ui_rect,
-                          V2(0.85f, 0.85f + 0.1f * 0.5f + 0.02f), 0.03f, STRING("Volume sliders"), FONT_REGULAR, true);
-                
-                Dropdown_Option options[] = {
-                    {{0}, STRING("None")},
-                    {{1}, STRING("One")},
-                    {{2}, STRING("Two")},
-                    {{3}, STRING("Three")},
-                };
-                Dropdown_Option *added_options = add_dropdown_options(dropdown_options, &dropdown_option_count,
-                                                                      options, ARRAY_LENGTH(options));
-                dropdown->options = added_options;
-            }
-            
-            ASSERT(  slider_count < 8);
-            ASSERT(  button_count < 8);
-            ASSERT(  toggle_count < 8);
-            ASSERT(dropdown_count < 8);
-            ASSERT(   label_count < 8);
-            ASSERT(dropdown_option_count < 8);
-            
-            page.slider_aabbs    = slider_aabbs;
-            page.sliders         = sliders;
-            page.slider_count    = slider_count;
-            
-            page.button_aabbs    = button_aabbs;
-            page.buttons         = buttons;
-            page.button_count    = button_count;
-            
-            page.toggle_aabbs    = toggle_aabbs;
-            page.toggles         = toggles;
-            page.toggle_count    = toggle_count;
-            
-            page.dropdown_aabbs = dropdown_aabbs;
-            page.dropdowns      = dropdowns;
-            page.dropdown_count = dropdown_count;
-            
-            page.labels         = labels;
-            page.label_count    = label_count;
-            
-            pages[page_count++] = page;
-        }
-        
-        { // Bindings and stuff page.
-            Menu_Page page = {};
-            rect2 ui_rect = main_rect;
-            f32 y_margin = 0.05f;
-            f32 x_margin = y_margin * GAME_ASPECT_RATIO;
-            ui_rect.  left += x_margin;
-            ui_rect. right -= x_margin;
-            ui_rect.bottom += y_margin;
-            ui_rect.   top -= y_margin;
-            
-            rect2      *slider_aabbs = push_array(&menu->block,    rect2, 8);
-            Slider     *sliders      = push_array(&menu->block,   Slider, 8);
-            s32         slider_count = 0;
-            
-            rect2      *button_aabbs = push_array(&menu->block,    rect2, 8);
-            Button     *buttons      = push_array(&menu->block,   Button, 8);
-            s32         button_count = 0;
-            
-            rect2      *toggle_aabbs = push_array(&menu->block,    rect2, 8);
-            Toggle     *toggles      = push_array(&menu->block,   Toggle, 8);
-            s32         toggle_count = 0;
-            
-            rect2    *dropdown_aabbs = push_array(&menu->block,    rect2, 8);
-            Dropdown *dropdowns      = push_array(&menu->block, Dropdown, 8);
-            s32       dropdown_count = 0;
-            
-            rect2   *keybind_aabbs   = push_array(&menu->block,    rect2, 8);
-            Keybind *keybinds        = push_array(&menu->block,  Keybind, 8);
-            s32      keybind_count   = 0;
-            
-            Menu_Label *labels       = push_array(&menu->block, Menu_Label, 8);
-            s32         label_count  = 0;
-            
-            add_button(button_aabbs, buttons, &button_count, ui_rect,
-                       V2(0.50f, 0.50f), V2(0.10f), make_any32(  0), (any32 *)&menu->current_page);
-            add_label(labels, &label_count, ui_rect,
-                      V2(0.50f, 0.50f + 0.10f * 0.5f + 0.02f), 0.03f, STRING("Page 0"), FONT_REGULAR, true);
-            
-            add_button(button_aabbs, buttons, &button_count, ui_rect,
-                       V2(0.05f, 0.50f), V2(0.04f), make_any32(800), (any32 *)&program_state->window_size[1]);
-            add_label(labels, &label_count, ui_rect,
-                      V2(0.05f, 0.50f + 0.04f * 0.5f + 0.02f), 0.03f, STRING("Make the window 1422*800"), FONT_REGULAR, true);
-            
-            add_slider(slider_aabbs, sliders, &slider_count, ui_rect,
-                       V2(0.2f, 0.35f), 1.0f, 0.1f, 0.05f, 1.0f, &g_cl->time_scale);
-            add_label(labels, &label_count, ui_rect,
-                      V2(0.0f, 0.35f), 0.03f, STRING("Simulation speed"), FONT_REGULAR, false);
-            
-            add_toggle(toggle_aabbs, toggles, &toggle_count, ui_rect,
-                       V2(0.75f, 0.50f), V2(0.10f), &program_state->should_close);
-            add_label(labels, &label_count, ui_rect,
-                      V2(0.75f, 0.50f + 0.10f * 0.5f + 0.02f), 0.03f, STRING("Close the game"), FONT_REGULAR, true);
-            
+    render_init(renderer, game_block, 1);
+    
 #if 0
-            add_keybind(keybind_aabbs, keybinds, &keybind_count, ui_rect,
-                        V2(0.8f, 0.3f), V2(0.1f), &program_state->input_settings.bindings[GAME_BUTTON_INDEX_left]);
-#endif
-            
-            ASSERT(  slider_count < 8);
-            ASSERT(  button_count < 8);
-            ASSERT(  toggle_count < 8);
-            ASSERT(dropdown_count < 8);
-            ASSERT(   label_count < 8);
-            
-            page.slider_aabbs   = slider_aabbs;
-            page.sliders        = sliders;
-            page.slider_count   = slider_count;
-            
-            page.button_aabbs   = button_aabbs;
-            page.buttons        = buttons;
-            page.button_count   = button_count;
-            
-            page.toggle_aabbs   = toggle_aabbs;
-            page.toggles        = toggles;
-            page.toggle_count   = toggle_count;
-            
-            page.dropdown_aabbs = dropdown_aabbs;
-            page.dropdowns      = dropdowns;
-            page.dropdown_count = dropdown_count;
-            
-            page.keybind_aabbs  = keybind_aabbs;
-            page.keybinds       = keybinds;
-            page.keybind_count  = keybind_count;
-            
-            page.labels      = labels;
-            page.label_count = label_count;
-            
-            pages[page_count++] = page;
-        }
-        
-        menu-> interaction = make_interaction();
-        menu->       hover = make_interaction();
-        menu->       pages = pages;
-        menu->current_page = 0;
-    }
-    
-    { // Rendering.
-        gl_setup();
-        render_info->aspect_ratio = 16.0f / 9.0f;
-        glGenBuffers(1, &render_info->idGeneralVertexBuffer);
-        
-        { // Shaders.
-            Shader texture_shader;
-            
-            texture_shader.program = GLTextureShader();
-            texture_shader.transform = glGetUniformLocation(texture_shader.program, "transform");
-            texture_shader.texture_sampler = glGetUniformLocation(texture_shader.program, "txSampler");
-            texture_shader.color = glGetAttribLocation(texture_shader.program, "vertColor");
-            texture_shader.p = glGetAttribLocation(texture_shader.program, "p");
-            texture_shader.uv = glGetAttribLocation(texture_shader.program, "vertUV");
-            
-            render_info->shaders[SHADER_INDEX_TEXTURE] = texture_shader;
-            render_info->last_shader_queued = SHADER_INDEX_COUNT;
-        }
-        
-        { // Transforms.
-            f32 *game_transform = (f32 *)(render_info->transforms[TRANSFORM_INDEX_GAME]);
-            f32 *rhus_transform = (f32 *)(render_info->transforms[TRANSFORM_INDEX_RIGHT_HANDED_UNIT_SCALE]);
-            
-            f32 game_scale_x = 2.0f / GAME_ASPECT_RATIO_X;
-            f32 game_scale_y = 2.0f / GAME_ASPECT_RATIO_Y;
-            game_transform[0] = game_scale_x;
-            game_transform[5] = game_scale_y;
-            game_transform[12] = 0.0f;
-            game_transform[13] = 0.0f;
-            game_transform[15] = 1.0f;
-            
-            rhus_transform[0] = 2.0f;
-            rhus_transform[5] = 2.0f;
-            rhus_transform[12] = -1.0f;
-            rhus_transform[13] = -1.0f;
-            rhus_transform[15] = 1.0f;
-        }
-    }
-    
     { // Text info:
         init(&text_info->glyph_hash, game_block);
         rect_pack_init(text_info->glyph_atlas_lines.lefts, text_info->glyph_atlas_lines.ys,
@@ -1850,575 +1439,9 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         u32 *zeroes = push_array(game_block, u32, GLYPH_ATLAS_SIZE * GLYPH_ATLAS_SIZE);
         text_info->glyph_atlas = gl_add_texture_linear_rgba(GLYPH_ATLAS_SIZE, GLYPH_ATLAS_SIZE, zeroes);
     }
-    
-#if GENESIS_BUILD_ASSETS_ON_STARTUP
-    { // Asset build on startup.
-        string *data_files = push_array(&temporary_memory, string, ASSET_UID_COUNT);
-        usize data_file_count = 0;
-        
-        { // Fonts
-            string font_names[] = {
-                STRING("fonts/Hack-Regular.ttf"),
-                STRING("fonts/Charter Italic.ttf"),
-                STRING("fonts/Charter Regular.ttf"),
-            };
-            
-            SCOPE_MEMORY(&temporary_memory);
-            
-            for(s32 ifont = 0; ifont < ARRAY_LENGTH(font_names); ++ifont) {
-                string font_full_path = concat(&temporary_memory, os_platform.debug_asset_directory,
-                                               font_names[ifont]);
-                string font_file = os_platform.read_entire_file(font_full_path);
-                
-                data_files[data_file_count++] = font_file;
-            }
-        }
-        
-        { // Audio files
-            string wav_files[] = {
-                STRING("music/Danse Macabre.wav"),
-                STRING("sounds/erase4.wav"),
-            };
-            const usize wav_file_count = ARRAY_LENGTH(wav_files);
-            files_convert_wav_to_facs(wav_files, ARRAY_LENGTH(wav_files), game_block, data_files + data_file_count);
-            
-            //
-            //
-            // @Temporary
-            // Audio compression research
-            //
-            //
-            {
-                string facs_file = data_files[data_file_count];
-                string compressed = push_string(game_block, facs_file.length);
-                auto *header = (FACS_Header *)facs_file.data;
-                ssize bytes_per_chunk = header->chunk_size + (header->encoding_flags & 1) * header->bytes_per_sample;
-                ssize samples_per_chunk = bytes_per_chunk / header->bytes_per_sample;
-                
-                f32 *scratch = push_array(game_block, f32, samples_per_chunk * 4);
-                zero_mem(scratch, sizeof(f32) * (samples_per_chunk - 1));
-                
-                *(FACS_Header *)compressed.data = *header;
-                usize written = sizeof(FACS_Header);
-                
-                // @Cleanup: See todo.txt.
-                ssize actual_samples_per_chunk = samples_per_chunk - 1;
-                
-                ssize no_filter_error = 0;
-                ssize delta_error = 0;
-                ssize gradient_error = 0;
-                ssize tri_error = 0;
-                FORI_NAMED(chunk_index, 2, header->chunk_count) {
-                    FORI_NAMED(channel_index, 0, header->channel_count) {
-                        s16 *chunk_samples = ((s16 *)(header + 1)) + samples_per_chunk * (chunk_index * header->channel_count) + 
-                            samples_per_chunk * channel_index;
-                        
-                        s16 *output_samples = (s16 *)(compressed.data + written);
-                        
-                        union {
-                            s16 _s16[8];
-                            __m128i _m128;
-                        } last = {};
-                        FORI(0, samples_per_chunk) {
-                            s16 current = chunk_samples[i];
-                            output_samples[i] = current - (last._s16[0] << 1) + last._s16[1];
-                            
-                            no_filter_error += s_abs(current);
-                            delta_error += s_abs(current - last._s16[0]);
-                            gradient_error += s_abs(current - (last._s16[0] << 1) + last._s16[1]);
-                            tri_error += s_abs(current - (last._s16[0]) + (last._s16[1] * 3) - (last._s16[2]));
-                            
-                            last._m128 = _mm_slli_si128(last._m128, 2);
-                            last._s16[0] = current;
-                        }
-                        
-#if 0
-                        // Slow MDCT:
-                        const ssize n = actual_samples_per_chunk;
-                        const ssize N = actual_samples_per_chunk >> 1;
-                        const f32 pi_over_2N = PI / (f32)(N << 1);
-                        const f32 N_plus_one_over_two = ((f32)N + 1.0f) * 0.5f;
-                        FORI_NAMED(out, 0, samples_per_chunk >> 1) {
-                            const f32 out_plus_one = 2.0f * (f32)out + 1.0f;
-                            f32 acc = 0.0f;
-                            FORI_NAMED(in, 0, samples_per_chunk) {
-                                f32 angle = pi_over_2N * ((f32)in + N_plus_one_over_two) * out_plus_one;
-                                
-                                angle = f_mod(angle, PI * 2.0f);
-                                acc += (f32)chunk_samples[in] * f_cos(angle);
-                            }
-                            scratch[out] = acc;
-                        }
-#else
-                        // Fast MDCT
-                        // MDCT preparation:
-                        f32 *u = scratch;
-                        
-                        ssize n = (s32)actual_samples_per_chunk;
-                        const ssize _3n_over_4 = (n * 3) >> 2;
-                        FORI(0, n >> 2) {
-                            u[i] = -(f32)chunk_samples[i + _3n_over_4];
-                        }
-                        FORI(n >> 2, n) {
-                            u[i] = (f32)chunk_samples[i - (n >> 2)];
-                        }
-                        
-                        // Twiddle factors:
-                        f32 *A = push_array(game_block, f32, actual_samples_per_chunk);
-                        f32 *B = push_array(game_block, f32, actual_samples_per_chunk);
-                        f32 *C = push_array(game_block, f32, actual_samples_per_chunk);
-                        
-                        FORI(0, n >> 2) {
-                            A[(i << 1)  ] = (float)  f_cos(f_mod(4*i*PI/n, 2.0f * PI));
-                            A[(i << 1)+1] = (float) -f_sin(f_mod(4*i*PI/n, 2.0f * PI));
-                            B[(i << 1)  ] = (float)  f_cos(f_mod(((i << 1)+1)*PI/n/2, 2.0f * PI));
-                            B[(i << 1)+1] = (float)  f_sin(f_mod(((i << 1)+1)*PI/n/2, 2.0f * PI));
-                        }
-                        FORI(0, n >> 3) {
-                            C[(i << 1)  ] = (float)  f_cos(f_mod(2*((i << 1)+1)*PI/n, 2.0f * PI));
-                            C[(i << 1)+1] = (float) -f_sin(f_mod(2*((i << 1)+1)*PI/n, 2.0f * PI));
-                        }
-                        
-                        // Kernel:
-                        
-                        // Step 1
-                        FORI(0, n >> 2) {
-                            const ssize four_k = i << 2;
-                            const f32 A2k      = A[i << 1];
-                            const f32 A2kplus1 = A[(i << 1) + 1];
-                            const f32 u4k_minus_unminus4kminus1      = u[four_k    ] - u[n - four_k - 1];
-                            const f32 u4kplus2_minus_unminus4kminus3 = u[four_k + 2] - u[n - four_k - 3];
-                            
-                            u[n - four_k - 1] = (u4k_minus_unminus4kminus1 * A2k) -
-                                (u4kplus2_minus_unminus4kminus3 * A2kplus1);
-                            u[n - four_k - 3] = (u4k_minus_unminus4kminus1 * A2kplus1) +
-                                (u4kplus2_minus_unminus4kminus3 * A2k);
-                        }
-                        
-                        
-                        // Step 2
-                        FORI(0, n >> 3) {
-                            const ssize four_k = i << 2;
-                            const ssize nover2_plus_4k  = (n >> 1) + four_k;
-                            const ssize nover2_minus_4k = (n >> 1) - four_k;
-                            const f32 Anover2_minus_4_minus_4k = A[n/2 - 4 - four_k];
-                            const f32 Anover2_minus_3_minus_4k = A[n/2 - 3 - four_k];
-                            
-                            const f32 v_fourkplus1 = u[four_k + 1];
-                            const f32 v_fourkplus3 = u[four_k + 3];
-                            const f32 v_nover2plus3plus4k = u[nover2_plus_4k + 3];
-                            const f32 v_nover2plus1plus4k = u[nover2_plus_4k + 1];
-                            
-                            u[nover2_plus_4k + 3] = v_nover2plus3plus4k + v_fourkplus3;
-                            u[nover2_plus_4k + 1] = v_nover2plus1plus4k + v_fourkplus1;
-                            u[four_k + 3] = (v_nover2plus3plus4k - v_fourkplus3) * Anover2_minus_4_minus_4k - 
-                                (v_nover2plus1plus4k - v_fourkplus1) * Anover2_minus_3_minus_4k;
-                            u[four_k + 1] = (v_nover2plus1plus4k - v_fourkplus1) * Anover2_minus_4_minus_4k + 
-                                (v_nover2plus3plus4k - v_fourkplus3) * Anover2_minus_3_minus_4k;
-                        }
-                        
-                        // Step 3
-                        s32 ld; // log2(n)
-                        
-                        bitscan_forward(n, &ld);
-                        FORI_NAMED(l, 0, ld - 3) {
-                            const ssize k0 = n >> (l + 2);
-                            const ssize k1 = (ssize)1 << (l + 3);
-                            
-                            FORI_NAMED(r, 0, n >> (l + 4)) {
-                                const ssize four_r = r << 2;
-                                FORI_NAMED(s, 0, (ssize)1 << (l + 1)) {
-                                    const ssize two_s = s << 1;
-                                    const f32 Ark1        = A[r * k1];
-                                    const f32 Ark1_plus_1 = A[r * k1 + 1];
-                                    const f32 w0 = u[n - 1 - k0 * two_s       - four_r];
-                                    const f32 w1 = u[n - 1 - k0 * (two_s + 1) - four_r];
-                                    const f32 w2 = u[n - 3 - k0 * two_s       - four_r];
-                                    const f32 w3 = u[n - 3 - k0 * (two_s + 1) - four_r];
-                                    
-                                    u[n - 1 - k0 * two_s - four_r] = w0 + w1;
-                                    u[n - 3 - k0 * two_s - four_r] = w2 + w3;
-                                    
-                                    u[n - 1 - k0 * (two_s + 1) - four_r] = (w0 - w1) * Ark1 - (w2 - w3) * Ark1_plus_1;
-                                    u[n - 3 - k0 * (two_s + 1) - four_r] = (w2 - w3) * Ark1 + (w0 - w1) * Ark1_plus_1;
-                                }
-                            }
-                        }
-                        
-                        // Step 4
-                        FORI(1, (n >> 3) - 1) {
-                            // stb_vorbis uses ld - 3???
-                            const ssize j = bit_reverse(i, ld - 3);
-                            if(i < j) {
-                                const ssize _8j = (j << 3);
-                                const ssize _8i = (i << 3);
-                                
-                                const f32 u0 = u[_8i + 1];
-                                const f32 u1 = u[_8j + 1];
-                                const f32 u2 = u[_8i + 3];
-                                const f32 u3 = u[_8j + 3];
-                                const f32 u4 = u[_8i + 5];
-                                const f32 u5 = u[_8j + 5];
-                                const f32 u6 = u[_8i + 7];
-                                const f32 u7 = u[_8j + 7];
-                                
-                                u[_8j + 1] = u0;
-                                u[_8i + 1] = u1;
-                                u[_8j + 3] = u2;
-                                u[_8i + 3] = u3;
-                                u[_8j + 5] = u4;
-                                u[_8i + 5] = u5;
-                                u[_8j + 7] = u6;
-                                u[_8i + 7] = u7;
-                            }
-                        }
-                        
-                        // Step 5
-                        FORI(0, n >> 1) {
-                            u[i] = u[(i << 1) + 1];
-                        }
-                        
-                        // Step 6
-                        FORI(0, n >> 3) {
-                            const ssize _2k = i << 1;
-                            const ssize _4k = i << 2;
-                            const f32 w0 = u[_4k];
-                            const f32 w1 = u[_4k + 1];
-                            const f32 w2 = u[_4k + 2];
-                            const f32 w3 = u[_4k + 3];
-                            
-                            u[n - 1 - _2k] = w0;
-                            u[n - 2 - _2k] = w1;
-                            u[((n * 3) >> 2) - 1 - _2k] = w2;
-                            u[((n * 3) >> 2) - 2 - _2k] = w3;
-                        }
-                        
-                        // Step 7
-                        FORI(0, n >> 3) {
-                            const ssize _2k      = i << 1;
-                            const ssize n_over_2 = n >> 1;
-                            const f32 C2k      = C[_2k];
-                            const f32 C2kplus1 = C[_2k + 1];
-                            
-                            const f32 u0 = u[n_over_2 + _2k    ];
-                            const f32 u1 = u[n_over_2 + _2k + 1];
-                            const f32 u2 = u[n - 2    - _2k    ];
-                            const f32 u3 = u[n - 2    - _2k + 1];
-                            const f32 u4 = u[n - 1    - _2k    ];
-                            
-                            
-                            u[n_over_2 + _2k]     = (u0 + u2 +
-                                                     C2kplus1 * (u0 - u2) +
-                                                     C2k * (u1 + u3)) * 0.5f;
-                            u[n_over_2 + _2k + 1] = (u1 - u4 +
-                                                     C2kplus1 * (u1 + u4) -
-                                                     C2k * (u0 - u2)) * 0.5f;
-                            u[n - 2 - _2k] = (u0 + u2 -
-                                              C2kplus1 * (u0 - u2) -
-                                              C2k * (u1 + u3)) * 0.5f;
-                            u[n - 1 - _2k] = (-u1 + u4 +
-                                              C2kplus1 * (u1 + u4) -
-                                              C2k * (u0 - u2)) * 0.5f;
-                        }
-                        
-                        // Step 8
-                        FORI(0, n >> 2) {
-                            const f32 B2k      = B[i << 1];
-                            const f32 B2kplus1 = B[2 * i + 1];
-                            const f32 v0 = u[(i << 1) + (n >> 1)];
-                            const f32 v1 = u[(i << 1) + (n >> 1) + 1];
-                            
-                            u[i] = v0 * B2k + v1 * B2kplus1;
-                            u[(n >> 1) - 1 - i] = v0 * B2kplus1 - v1 * B2k;
-                        }
-#endif
-                        
-#if 0
-                        {
-                            SCOPE_MEMORY(game_block);
-                            string output = push_string(game_block, 30 + 50 * samples_per_chunk);
-                            usize printed = 0;
-                            printed += print(output.data + printed, output.length - printed, "Some title\n");
-                            output.length = printed;
-                            os_platform.write_entire_file(STRING("blah"), output);
-                        }
-#endif
-                        __debugbreak();
-                    }
-                }
-                
-                
-                usize final_compressed_size = facs_file.length;
-                os_platform.print(tprint("File size: %u -> %u (%f%%).\n",
-                                         facs_file.length,
-                                         final_compressed_size,
-                                         ((f64)facs_file.length / (f64)final_compressed_size * 100.0)));
-                program_state->should_close = true;
-            }
-            
-            
-            data_file_count += wav_file_count;
-        }
-        
-#if 0
-        // Compression benchmark.
-        {
-            string comp_names[] = {
-                STRING("silesia/dickens"),
-                STRING("silesia/mozilla"),
-                STRING("silesia/mr"),
-                STRING("silesia/nci"),
-                STRING("silesia/ooffice"),
-                STRING("silesia/osdb"),
-                STRING("silesia/reymont"),
-                STRING("silesia/samba"),
-                STRING("silesia/sao"),
-                STRING("silesia/webster"),
-                STRING("silesia/xml"),
-                STRING("silesia/x-ray"),
-            };
-            
-            string uncompressed_files[ARRAY_LENGTH(comp_names)] = {};
-            string compressed_files[ARRAY_LENGTH(comp_names)] = {};
-            u64 decode_cycles[ARRAY_LENGTH(comp_names)] = {};
-            
-            for(u32 i = 0; i < ARRAY_LENGTH(comp_names); ++i) {
-                string uncompressed = os_platform.read_entire_file(comp_names[i]);
-                string compressed = fastcomp_compress(uncompressed, game_block);
-                uncompressed_files[i] = uncompressed;
-                compressed_files[i] = compressed;
-            }
-            
-            u8 *decode_buffer = push_array(game_block, u8, KiB(256));
-            for(u32 i = 0; i < ARRAY_LENGTH(comp_names); ++i) {
-                string compressed = compressed_files[i];
-                u64 tstart = READ_CPU_CLOCK();
-                fastcomp_decompress(compressed, decode_buffer);
-                u64 tend = READ_CPU_CLOCK();
-                u64 dcy = tend - tstart;
-                decode_cycles[i] = dcy;
-            }
-            
-            u8 print_buffer[512];
-            string prt;
-            prt.data = print_buffer;
-            for(u32 i = 0; i < ARRAY_LENGTH(comp_names); ++i) {
-                prt.length = print(print_buffer, 512, "%s : %u -> %u, %ucy\n",
-                                   comp_names[i].data, uncompressed_files[i].length,
-                                   compressed_files[i].length, decode_cycles[i]);
-                os_platform.print(prt);
-            }
-        }
-#endif
-        
-        { // Texture files
-            // Input data needed for a file:
-            string bmp_names[TEXTURE_UID_COUNT] = {
-                STRING("textures/blank.bmp"),
-                STRING("textures/untextured.bmp"),
-                STRING("textures/circle.bmp"),
-                STRING("textures/default_hitbox.bmp"),
-                STRING("textures/default_hurtbox.bmp"),
-                STRING("textures/default_solid.bmp"),
-                STRING("textures/player.bmp"),
-                STRING("textures/xhair.bmp"),
-                STRING("textures/grid_tile.bmp"),
-            };
-            // Debug textures should have a scale of 1.0f so as to preserve input dimensions.
-            v2 bmp_halfdims[TEXTURE_UID_COUNT] = {
-                V2(1.0f),
-                V2(1.0f),
-                V2(1.0f),
-                V2(1.0f),
-                V2(1.0f),
-                V2(1.0f),
-                V2(1.0f),
-                V2(0.02f * INV_GAME_ASPECT_RATIO, 0.02f),
-                V2(1.0f),
-            };
-            // We specify these here as 0-1 and then prebake the multiplication by halfdim.
-            v2 bmp_offsets[TEXTURE_UID_COUNT] = {
-                V2(),
-                V2(),
-                V2(),
-                V2(),
-                V2(),
-                V2(),
-                V2(),
-                V2(),
-                V2(),
-            };
-            const u32 bmp_count = TEXTURE_UID_COUNT;
-            for(s32 i = 0; i < bmp_count; ++i) {
-                bmp_offsets[i] = v2_hadamard_prod(bmp_offsets[i], bmp_halfdims[i]);
-            }
-            string ta = files_convert_bmp_to_ta(bmp_names, bmp_halfdims, bmp_offsets, bmp_count, game_block);
-            data_files[data_file_count++] = ta;
-        }
-        
-        { // Levels
-            { // 1
-                usize allocated_size = KiB(4);
-                string output = push_string(game_block, allocated_size);
-                
-                v2 map_halfdim = V2(TEST_MAP_WIDTH, TEST_MAP_HEIGHT);
-                
-                const s32 player_count = 1;
-                
-                v2 player_ps[player_count] = {
-                    V2(),
-                };
-                s32 player_partner_counts[player_count] = {
-                    3,
-                };
-                
-                const s32 partner_count = 4;
-                
-                s32 player_partners[player_count][partner_count] = {
-                    {
-                        0, 1, 2, 3,
-                    },
-                };
-                v2 partner_offsets[partner_count] = {
-                    V2(-1.0f, 0.0f),
-                    V2(0.0f, -1.0f),
-                    V2(1.0f, 0.0f),
-                    V2(0.0f, 1.0f),
-                };
-                
-                const s32 turret_count = 1;
-                
-                v2 turret_ps[turret_count] = {
-                    V2(0.0f, 2.0f),
-                };
-                f32 turret_cooldowns[turret_count] = {
-                    1.0f,
-                };
-                
-                
-                const s32 dog_count = 1;
-                
-                v2 dog_ps[dog_count] = {
-                    V2(2.0f),
-                };
-                
-                const s32 wall_turret_count = 1;
-                
-                v2 wall_turret_ps[wall_turret_count] = {
-                    V2(-1.0f),
-                };
-                
-                /* @Cleanup: Do we care about trees?
-                const s32 tree_count = 1;
-                
-                v2 
-                */
-                
-                const s32 target_count = 1;
-                
-                v2 target_ps[target_count] = {
-                    V2(-3.0f, 2.2f),
-                };
-                
-                Serialised_Level_Data level;
-                
-                // @Cleanup: Use layout_serialised_level_data()
-                
-                level.header = (Level_Header *)output.data;
-                
-                level.player_ps = (v2 *)(level.header + 1);
-                level.partner_offsets = (v2 *)(level.player_ps + player_count);
-                level.turret_ps = (v2 *)(level.partner_offsets + partner_count);
-                level.turret_cooldowns = (f32 *)(level.turret_ps + turret_count);
-                level.dog_ps = (v2 *)(level.turret_cooldowns + turret_count);
-                level.wall_turret_ps = (v2 *)(level.dog_ps + dog_count);
-                // @Cleanup: Do we care about trees?
-                level.target_ps = (v2 *)(level.wall_turret_ps + wall_turret_count);
-                
-                u8 *end_of_file = (u8 *)(level.target_ps + target_count);
-                usize file_size = end_of_file - output.data;
-                ASSERT(file_size < allocated_size);
-                
-                level.header->version = 1;
-                level.header->index = 1;
-                level.header->map_halfdim = map_halfdim;
-                level.header->player_count = player_count;
-                level.header->partner_count = partner_count;
-                level.header->turret_count = turret_count;
-                level.header->dog_count = dog_count;
-                level.header->wall_turret_count = wall_turret_count;
-                level.header->target_count = target_count;
-                
-                for(s32 i = 0; i < player_count; ++i) {
-                    s32 this_partner_count = player_partner_counts[i];
-                    
-                    level.player_ps[i] = player_ps[i];
-                }
-                for(s32 i = 0; i < partner_count; ++i) {
-                    level.partner_offsets[i] = partner_offsets[i];
-                }
-                for(s32 i = 0; i < turret_count; ++i) {
-                    level.turret_ps[i] = turret_ps[i];
-                    level.turret_cooldowns[i] = turret_cooldowns[i];
-                }
-                for(s32 i = 0; i < dog_count; ++i) {
-                    level.dog_ps[i] = dog_ps[i];
-                }
-                FORI(0, wall_turret_count) {
-                    level.wall_turret_ps[i] = wall_turret_ps[i];
-                }
-                for(s32 i = 0; i < target_count; ++i) {
-                    level.target_ps[i] = target_ps[i];
-                }
-                
-                data_files[data_file_count++] = output;
-            }
-        }
-        
-        { // Writing a datapack:
-            string pack_name = STRING("1.datapack");
-            ASSERT(data_file_count == ASSET_UID_COUNT);
-            usize file_entries = data_file_count + 1;
-            usize write_offset = sizeof(Datapack_Header) + sizeof(Datapack_Asset_Info) * file_entries;
-            Datapack_Header header;
-            header.version = 0;
-            usize data_files_total_size = 0;
-            
-            for(usize i = 0; i < data_file_count; ++i) {
-                data_files_total_size += data_files[i].length;
-            }
-            
-            string pack_file = push_string(game_block, data_files_total_size + write_offset);
-            Datapack_Asset_Info *asset_table = (Datapack_Asset_Info *)(((Datapack_Header *)pack_file.data) + 1);
-            
-            for(usize i = 0; i < data_file_count; ++i) {
-                string source = data_files[i];
-                ASSERT(source.data && source.length);
-                
-                Datapack_Asset_Info entry = {};
-                // @Cleanup: We technically support more than 32-bit offsets.
-                ASSERT(write_offset < U32_MAX);
-                entry.location_low = (u32)write_offset;
-                entry.compression = DATAPACK_COMPRESSION_NONE;
-                asset_table[i] = entry;
-                
-                mem_copy(source.data, pack_file.data + write_offset, source.length);
-                
-                write_offset += source.length;
-            }
-            
-            Datapack_Asset_Info last_entry;
-            last_entry.all = write_offset;
-            asset_table[data_file_count] = last_entry;
-            
-            *(Datapack_Header *)pack_file.data = header;
-            ASSERT(write_offset == data_files_total_size + sizeof(Datapack_Header) + sizeof(Datapack_Asset_Info) * file_entries);
-            
-            os_platform.write_entire_file(pack_name, pack_file);
-        }
-    }
 #endif
     
+#if 0
     { // Reading a datapack:
         void *handle = os_platform.open_file(STRING("1.datapack"));
         usize length = os_platform.file_size(handle);
@@ -2435,7 +1458,9 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         pack_handle.assets = (Datapack_Asset_Info *)(header + 1);
         g_cl->assets.datapack = pack_handle;
     }
+#endif
     
+#if 0
     { // Getting assets from the datapack:
         Datapack_Handle pack = g_cl->assets.datapack;
         
@@ -2445,11 +1470,11 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
             string ta = push_string(game_block, meta.size);
             os_platform.read_file(meta.location.file_handle, ta.data, meta.location.offset, meta.size);
             
-            ta_to_texture_ids(ta, render_info, render_info->textures_by_uid);
+            ta_to_texture_ids(ta, renderer, renderer->textures_by_uid);
             
-            render_info->blank_texture_id = FIND_TEXTURE_ID(render_info, blank);
-            render_info->   untextured_id = FIND_TEXTURE_ID(render_info, untextured);
-            render_info->       circle_id = FIND_TEXTURE_ID(render_info, circle);
+            renderer->blank_texture_id = FIND_TEXTURE_ID(renderer, blank);
+            renderer->   untextured_id = FIND_TEXTURE_ID(renderer, untextured);
+            renderer->       circle_id = FIND_TEXTURE_ID(renderer, circle);
         }
         
         { // FACS:
@@ -2464,6 +1489,7 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
             init_font(&info->text, &pack, FONT_REGULAR, ASSET_UID_charter_regular_ttf);
         }
     }
+#endif
     
     {
         g_cl->time_scale = 1.0f;
@@ -2475,18 +1501,19 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         }
     }
     
-    
+    // @XX
     // This is to make sure that game input is properly initted.
-    close_menu(g_cl);
+    // close_menu(g_cl);
     
-    info->clock.cur_time = os_platform.get_seconds();
-    info->clock.sim_time = info->clock.cur_time;
+    info->sim_time = program_state->time;
 }
 
-static void draw_xhair(Rendering_Info * const render_info, const Texture_ID xhair_texture, const v2 xhairp) {
+#if 0 // @XX
+static void draw_xhair(Renderer * const renderer, const Texture_Handle xhair_texture, const v2 xhairp) {
     ASSERT(f_in_range(xhairp.x, 0.0f, 1.0f) && f_in_range(xhairp.y, 0.0f, 1.0f));
-    queue_quad(render_info, xhair_texture, xhairp, V2(1.0f), V2(1.0f, 0.0f), V4(1.0f));
+    queue_quad(renderer, xhair_texture, xhairp, V2(1.0f), V2(1.0f, 0.0f), V4(1.0f));
 }
+#endif
 
 inline void Implicit_Context::reset_temporary_memory() {
     temporary_memory.used = 0;
@@ -2507,26 +1534,27 @@ void Implicit_Context::clone_game_state(Game *source, Game *clone) {
     // None for now!
 }
 
-GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
+GAME_RUN_FRAME(Implicit_Context::g_run_frame) { 
     TIME_BLOCK;
+    temporary_memory.used = 0;
+    
     Game_Block_Info * const info        = (Game_Block_Info *)game_block->mem;
     Game_Client     * const g_cl        = &info->client;
-    Rendering_Info  * const render_info = &info->render_info;
+    Renderer        * const renderer = &info->renderer;
     Audio_Info      * const  audio_info = &info->audio;
     Text_Info       * const   text_info = &info->text;
-    Menu            * const menu        = &info->menu;
     
     // Clock:
-    const f64 cur_time = os_platform.get_seconds();
-    const f64 sim_time = info->clock.sim_time;
+    const f64 cur_time = program_state->time;
+    const f64 sim_time = info->sim_time;
     
-    f64        sim_dt = cur_time -             sim_time;
-    const f64 real_dt = cur_time - info->clock.cur_time;
-    
-    f64 this_frame_sim_time = 0.0;
+    f64        sim_dt = cur_time -            sim_time;
+    const f64 real_dt = cur_time - program_state->time;
     
     const f64 game_time_scale = (f64)g_cl->time_scale;
     sim_dt *= game_time_scale;
+    
+    f64 this_frame_sim_time = 0.0;
     
     // Log:
     if(!global_log) {
@@ -2535,17 +1563,16 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     global_log->temporary_buffer.length = 0;
     global_log->heads_up_alpha -= (f32)real_dt;
     
-    temporary_memory.used = 0;
-    
     { // Parsing the program state:
         if(program_state) {
-            maybe_update_render_size(render_info, program_state->window_size);
-            mem_copy(&render_info->draw_rect, &program_state->draw_rect, sizeof(rect2s));
+            // @XX
+            // I think we don't even need to take care of this in the game code anymore.
+            // maybe_update_render_size(renderer, program_state->window_size);
+            // mem_copy(&renderer->draw_rect, &program_state->draw_rect, sizeof(rect2s));
         }
     }
     
-    const u32 current_player = g_cl->g.current_player;
-    // NOTE: We copy input because it's overall more robust to transitions.
+    // We copy input because it's overall more robust to transitions.
     Input game_input = program_state->input;
     Input menu_input = program_state->input;
     
@@ -2585,21 +1612,22 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     
     if(BUTTON_PRESSED(&game_input, menu)) {
         if(g_cl->in_menu) {
-            close_menu(g_cl);
+            // @XX
+            // close_menu(g_cl);
             // If we don't do this, we send the same input to both the game and the menu,
             // which results in double presses which can lead to the menu reopening on the same
             // frame.
             advance_input(&game_input);
         } else {
-            open_menu(g_cl);
+            // @XX
+            // open_menu(g_cl);
         }
     }
     
-    { // Game update:
-        TIME_BLOCK;
-        
+    { TIME_BLOCK; // Game update:
         if(g_cl->in_menu) {
-            update_menu(menu, render_info, &menu_input, program_state);
+            // @XX
+            // update_menu(menu, renderer, &menu_input, program_state);
             program_state->input = menu_input;
             this_frame_sim_time = sim_dt;
         } else {
@@ -2613,7 +1641,8 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
                 SCOPE_MEMORY(&temporary_memory);
                 
                 // Server frame: actual simulation.
-                g_full_update(&g_cl->g, &game_input, PHYSICS_DT, audio_info, &g_cl->assets.datapack);
+                // @Temporary
+                // g_full_update(&g_cl->g, &game_input, PHYSICS_DT, audio_info, &g_cl->assets.datapack);
                 
                 this_frame_sim_time += PHYSICS_DT;
                 os_platform.print(global_log->temporary_buffer);
@@ -2630,8 +1659,9 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
                 logprint(global_log, "Frame remainder: %fms\n", frame_remainder * 1000.0);
                 Input clone_input = game_input;
                 
-                clone_game_state(&g_cl->g, &g_cl->visual_state);
-                g_full_update(&g_cl->visual_state, &clone_input, frame_remainder, 0, 0);
+                // @Temporary
+                // clone_game_state(&g_cl->g, &g_cl->visual_state);
+                // g_full_update(&g_cl->visual_state, &clone_input, frame_remainder, 0, 0);
             }
             
             program_state->input = game_input;
@@ -2645,41 +1675,139 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     // -  During (OS/computer-level) stalls, such as window moving/resizing.
     // -  When our framerate is fast enough, since we're filling the buffer ahead of time.
     
-    {
-        Entire_Sound_Update_Payload payload;
-        payload.audio = audio_info;
-        payload.dt = (f32)real_dt;
-        info->sound_update_payload = payload;
-        os_platform.add_thread_job(&Implicit_Context::entire_sound_update, &info->sound_update_payload);
-    }
+    u32 samples_to_update = os_platform.begin_sound_update();
+    s16* update_buffer = update_synth(&info->synth, samples_to_update);
+    os_platform.end_sound_update(update_buffer, samples_to_update);
     
     // Rendering:
+#if 0 // :ReenableGraphics
     if(program_state->should_render) {
-        queue_clear(render_info);
+        render_begin_frame_and_clear(renderer, V4(1.0f, 0.0f, 1.0f, 1.0f));
         
-        draw_game(render_info, &g_cl->visual_state, &g_cl->assets);
+        // draw_game_single_threaded(renderer, &g_cl->visual_state, &g_cl->assets);
         
-        queue_shader(render_info, SHADER_INDEX_TEXTURE);
-        queue_transform(render_info, TRANSFORM_INDEX_RIGHT_HANDED_UNIT_SCALE);
+        render_set_transform_right_handed_unit_scale(renderer->command_queue.command_list_handle);
         
         // Drawing UI:
         if(g_cl->in_menu) {
-            draw_menu(menu, g_cl, render_info, text_info);
+            f32 render_target_height = CAST(f32, program_state->draw_rect.top - program_state->draw_rect.bottom);
+            draw_menu(menu, g_cl, renderer, text_info, render_target_height);
         }
         
         if((global_log->heads_up_buffer.length > 0) && (global_log->heads_up_alpha > 0.0f)) {
-            text_add_string(text_info, render_info, global_log->heads_up_buffer, V2(0.5f, 0.8f), 0.15f, FONT_MONO, true);
+            // @XX
+            // text_add_string(text_info, renderer, global_log->heads_up_buffer, V2(0.5f, 0.8f), 0.15f, FONT_MONO, true);
         }
         
         if(text_info->strings.count) {
-            text_update(text_info, render_info);
+            text_update(text_info, renderer);
         }
         
-        draw_queue(render_info);
+        os_platform.submit_commands(&renderer->command_queue.command_list_handle, 1, true);
+        render_end_frame(renderer);
+    }
+#else
+    // Dumb debug frame
+    render_begin_frame_and_clear(renderer, V4(1.0f, 0.0f, 1.0f, 1.0f));
+    
+    render_set_transform_game_camera(renderer->command_queue.command_list_handle, V2(), V2(1.0f, 0.0f), 1.0f);
+    
+    static bool first_pass = true;
+    if(first_pass) { // Generate basic meshes.
+        first_pass = !first_pass;
+        
+        { // Basic quad.
+            s32 index_count = 6;
+            Render_Vertex *vertex_mapped;
+            u16 *index_mapped;
+            u16 handle = os_platform.make_editable_mesh(sizeof(Render_Vertex), 4, CAST(u8 **, &vertex_mapped), CAST(u8 **, &index_mapped));
+            ASSERT(handle == RESERVED_MESH_HANDLE::QUAD);
+            
+            vertex_mapped[0] = make_render_vertex(V2(0.5f, 0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            vertex_mapped[1] = make_render_vertex(V2(-0.5f, 0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            vertex_mapped[2] = make_render_vertex(V2(-0.5f, -0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            vertex_mapped[3] = make_render_vertex(V2(0.5f, -0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            
+            index_mapped[0] = 0;
+            index_mapped[1] = 1;
+            index_mapped[2] = 2;
+            index_mapped[3] = 0;
+            index_mapped[4] = 2;
+            index_mapped[5] = 3;
+            
+            os_platform.update_editable_mesh(renderer->command_queue.command_list_handle, handle, index_count, true);
+        }
+        
+        { // Color picker.
+            // @Hack: The actual rendered color picker doesn't match the colors we sample from it. This is a quick and dirty
+            // way of approximating the results.
+            // Normally you'd interpolate in HSV and then convert to RGB rather than interpolating directly in RGB.
+            s32 index_count = 6;
+            Render_Vertex *vertex_mapped;
+            u16 *index_mapped;
+            u16 handle = os_platform.make_editable_mesh(sizeof(Render_Vertex), 4, CAST(u8 **, &vertex_mapped), CAST(u8 **, &index_mapped));
+            ASSERT(handle == RESERVED_MESH_HANDLE::COLOR_PICKER);
+            
+            vertex_mapped[0] = make_render_vertex(V2(0.5f, 0.5f), V4(1.0f, 0.0f, 0.0f, 1.0f));
+            vertex_mapped[1] = make_render_vertex(V2(-0.5f, 0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            vertex_mapped[2] = make_render_vertex(V2(-0.5f, -0.5f), V4(0.0f, 0.0f, 0.0f, 1.0f));
+            vertex_mapped[3] = make_render_vertex(V2(0.5f, -0.5f), V4(0.0f, 0.0f, 0.0f, 1.0f));
+            
+            index_mapped[0] = 0;
+            index_mapped[1] = 1;
+            index_mapped[2] = 2;
+            index_mapped[3] = 0;
+            index_mapped[4] = 2;
+            index_mapped[5] = 3;
+            
+            renderer->color_picker_color = &vertex_mapped[0].color;
+            
+            os_platform.update_editable_mesh(renderer->command_queue.command_list_handle, handle, index_count, false);
+        }
+        
+        Output_Mesh mesh = {};
+        { // Default edit mesh.
+            // @Hardcoded
+#define MAX_EDITABLE_MESH_VERTEX_COUNT 256
+            s32 index_count = 3;
+            Render_Vertex *vertex_mapped;
+            u16 *index_mapped;
+            u16 handle = os_platform.make_editable_mesh(sizeof(Render_Vertex), MAX_EDITABLE_MESH_VERTEX_COUNT, CAST(u8 **, &vertex_mapped), CAST(u8 **, &index_mapped));
+            
+            vertex_mapped[0] = make_render_vertex(V2( 0.0f, 0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            vertex_mapped[1] = make_render_vertex(V2(-0.5f, 0.0f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            vertex_mapped[2] = make_render_vertex(V2( 0.5f, 0.0f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            
+            index_mapped[0] = 0;
+            index_mapped[1] = 1;
+            index_mapped[2] = 2;
+            
+            os_platform.update_editable_mesh(renderer->command_queue.command_list_handle, handle, index_count, false);
+            
+            mesh_init(&info->mesh_editor);
+            
+            mesh.handle = handle;
+            mesh.vertex_mapped = vertex_mapped;
+            mesh.index_mapped = index_mapped;
+            mesh.vert_count = 3;
+            mesh.index_count = 3;
+            mesh.default_offset = V2();
+            mesh.default_scale = V2(1.0f);
+            mesh.default_rot = V2(1.0f, 0.0f);
+            info->edit_mesh = add_mesh(&info->mesh_editor, &mesh, MAX_EDITABLE_MESH_VERTEX_COUNT, V4(0.3f, 0.07f, 0.0f, 1.0f));
+        }
     }
     
+    mesh_update(&info->mesh_editor, renderer, &menu_input);
+    program_state->input = menu_input;
+    
+    os_platform.submit_commands(&renderer->command_queue.command_list_handle, 1, true);
+    
+    render_end_frame(renderer);
+#endif
+    
 #if GENESIS_DEV
-    profile_update(profiler, program_state, text_info, render_info, &profiler_input);
+    profile_update(profiler, program_state, text_info, renderer, &profiler_input);
     
     if(profiler->has_focus) {
         program_state->input = profiler_input;
@@ -2687,16 +1815,15 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
 #endif
     
     ASSERT(sim_time <= cur_time);
-    info->clock.cur_time = cur_time;
-    info->clock.sim_time += this_frame_sim_time / game_time_scale;
+    program_state->time = cur_time;
+    info->sim_time += this_frame_sim_time / game_time_scale;
     
     if(program_state->should_close) {
         { // Update the config.
             User_Config config = {};
             config.version = USER_CONFIG_VERSION;
             config.fullscreen = program_state->should_be_fullscreen;
-            config.window_dim.x = (s16)program_state->window_size[0];
-            config.window_dim.y = (s16)program_state->window_size[1];
+            config.window_dim = V2S16(program_state->window_size);
             config.input = program_state->input_settings;
             config.volume = audio_info->target_volume;
             
@@ -2714,6 +1841,9 @@ extern "C" GAME_GET_API(g_get_api) {
     Game_Interface game_export;
     game_export.init_mem  = &Implicit_Context::g_init_mem;
     game_export.run_frame = &Implicit_Context::g_run_frame;
-    gl_load_needed_functions(os_import->opengl.all_functions);
     return game_export;
 }
+
+// @XX Sigh.
+void Implicit_Context::text_update(Text_Info *,Renderer *) {}
+void Implicit_Context::profile_update(Profiler *,Program_State *,Text_Info *,Renderer *,Input *) {}

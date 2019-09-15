@@ -1,60 +1,4 @@
 
-// Basic functions(GL1-2) that we are expecting to get with GetProcAddress:
-static const char *opengl_base_functions[] = {
-    "glBindTexture",
-    "glBlendFunc",
-    "glClear",
-    "glClearColor",
-    "glDrawArrays",
-    "glEnable",
-    "glGenTextures",
-    "glTexImage2D",
-    "glTexParameteri",
-    "glViewport",
-    "glGetString",
-    "glBegin",
-    "glEnd",
-    "glColor4f",
-    "glVertex2f",
-    "glDisable",
-    "glTexSubImage2D",
-};
-
-// GL extension functions that we try to get with wglGetProcAddress:
-static const char * const opengl_extended_functions[] = {
-    "glEnableVertexAttribArray",
-    "glDisableVertexAttribArray",
-    "glGetAttribLocation",
-    "glVertexAttribPointer",
-    "glShaderSource",
-    "glCompileShader",
-    "glCreateShader",
-    "glCreateProgram",
-    "glAttachShader",
-    "glLinkProgram",
-    "glValidateProgram",
-    "glGetProgramiv",
-    "glGetShaderInfoLog",
-    "glGetProgramInfoLog",
-    "glUseProgram",
-    "glUniformMatrix2fv",
-    "glUniformMatrix4fv",
-    "glGetUniformLocation",
-    "glUniform1i",
-    "glDebugMessageCallback",
-    "glDebugMessageControl",
-    "glGenVertexArrays",
-    "glBindVertexArray",
-    "glGenBuffers",
-    "glBindBuffer",
-    "glBufferData",
-    "glActiveTexture",
-    "glGenFramebuffers",
-    "glBindFramebuffer",
-    "glFramebufferTexture2D",
-    "glDeleteShader",
-};
-
 #define OS_GET_SECS(name) f64 name()
 typedef OS_GET_SECS(os_get_secs);
 #define OS_MEM_ALLOC(name) void *name(usize size)
@@ -84,8 +28,54 @@ typedef OS_PRINT(os_print);
 #define OS_CLOSE_FILE(name) void name(void *handle)
 typedef OS_CLOSE_FILE(os_close_file);
 
+struct Make_Vertex_Buffer_Output {
+    u16 handle;
+    u8* mapped_buffer;
+};
+
+struct Mesh_Instance {
+    v2 offset;
+    v2 scale;
+    v2 rot;
+    v4 color;
+};
+
+struct Draw_Command {
+    u16 mesh_handle;
+    s32 instance_count;
+};
+
+struct Render_Vertex {
+    v2 p;
+    v4 color;
+};
+static inline Render_Vertex make_render_vertex(v2 p, v4 color) {
+    Render_Vertex result;
+    result.p = p;
+    result.color = color;
+    return result;
+}
+
+#define GPU_BEGIN_FRAME_AND_CLEAR(name) void name(u16 list_handle, v4 clear_color)
+typedef GPU_BEGIN_FRAME_AND_CLEAR(gpu_begin_frame_and_clear);
+#define GPU_END_FRAME(name) void name()
+typedef GPU_END_FRAME(gpu_end_frame);
+#define GPU_MAKE_COMMAND_LISTS(name) void name(u16 *out, s32 count)
+typedef GPU_MAKE_COMMAND_LISTS(gpu_make_command_lists);
+#define GPU_MAKE_VERTEX_BUFFERS(name) void name(Make_Vertex_Buffer_Output *out, s32 *vert_sizes, s32 *lengths, s32 count)
+typedef GPU_MAKE_VERTEX_BUFFERS(gpu_make_vertex_buffers);
+#define GPU_SET_TRANSFORM(name) void name(u16 list_handle, f32 *transform)
+typedef GPU_SET_TRANSFORM(gpu_set_transform);
+#define GPU_SUBMIT_COMMANDS(name) void name(u16 *list_handles, s32 list_count, bool end_frame)
+typedef GPU_SUBMIT_COMMANDS(gpu_submit_commands);
+#define GPU_DRAW_MESH_INSTANCES(name) void name(u16 list_handle, u16 instance_buffer_handle, Draw_Command *commands, s32 command_count)
+typedef GPU_DRAW_MESH_INSTANCES(gpu_draw_mesh_instances);
+#define GPU_MAKE_EDITABLE_MESH(name) u16 name(s32 vertex_size, s32 vertex_capacity, u8 **vertex_mapped, u8 **index_mapped)
+typedef GPU_MAKE_EDITABLE_MESH(gpu_make_editable_mesh);
+#define GPU_UPDATE_EDITABLE_MESH(name) void name(u16 list_handle, u16 editable_handle, s32 index_count, bool make_read_only)
+typedef GPU_UPDATE_EDITABLE_MESH(gpu_update_editable_mesh);
+
 struct os_function_interface {
-    os_get_secs *get_seconds;
     os_mem_alloc *mem_alloc;
     os_open_file *open_file;
     os_close_file *close_file;
@@ -100,40 +90,62 @@ struct os_function_interface {
     os_print *print;
     os_add_thread_job *add_thread_job;
     
-    
-#if GENESIS_BUILD_ASSETS_ON_STARTUP
-    string debug_asset_directory;
-#endif
-    
-    
+    gpu_begin_frame_and_clear *begin_frame_and_clear;
+    gpu_end_frame *end_frame;
+    gpu_make_command_lists *make_command_lists;
+    gpu_make_vertex_buffers *make_vertex_buffers;
+    gpu_set_transform *set_transform;
+    gpu_submit_commands *submit_commands;
+    gpu_draw_mesh_instances *draw_mesh_instances;
+    gpu_make_editable_mesh *make_editable_mesh;
+    gpu_update_editable_mesh *update_editable_mesh;
 };
 
-struct opengl_function_interface {
-    union {
-        struct {
-            void *base_functions[ARRAY_LENGTH(opengl_base_functions)];
-            void *extended_functions[ARRAY_LENGTH(opengl_extended_functions)];
-        };
-        void *all_functions[ARRAY_LENGTH(opengl_base_functions) + ARRAY_LENGTH(opengl_extended_functions)];
-    };
+ENUM(Shader_ID) {
+    STANDARD_VERTEX = 0,
+    STANDARD_PIXEL,
+    
+    COUNT,
 };
+
+ENUM(Vertex_Buffer_ID) {
+    P_COLOR_INDEX,
+    
+    COUNT,
+};
+
+ENUM(Constant_Buffer_ID) {
+    VERTEX_POSITION,
+    VERTEX_COLOR,
+    
+    COUNT,
+};
+
+#if 0 // :RemoveTextures
+ENUM(Texture_ID) {
+    FIRST = 0,
+    SECOND,
+    
+    COUNT,
+};
+#endif
 
 struct OS_Export {
     os_function_interface os;
-    opengl_function_interface opengl;
 };
 
 struct Program_State {                // Updated by...
     s32 core_count;                   // Platform
+    f64 time;
     
     s32 audio_output_rate;            // Platform
     s32 audio_output_channels;        // Platform
     
     Input input;                      // Platform
     bool should_be_fullscreen;        // Either ;Settings
-    s32 window_size[2];               // Either ;Settings
-    s32 draw_rect[4];                 // Game
-    s32 cursor_position_in_pixels[2]; // Platform
+    v2s window_size;                  // Either ;Settings
+    rect2s draw_rect;                 // Platform
+    v2 cursor_position_barycentric;   // Platform
     bool should_render;               // Platform
     
     Input_Settings input_settings;    // Game ;Settings

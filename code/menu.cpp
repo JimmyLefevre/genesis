@@ -58,7 +58,7 @@ static inline rect2 framed_rect_pdim(v2 p, v2 dim, rect2 frame) {
     return result;
 }
 
-static Button *add_button(rect2 *aabbs, Button *buttons, s32 *count, rect2 frame,
+static Button *add_button(Menu_Page *page, rect2 frame,
                           v2 p, v2 dim, any32 set_to, any32 *actual) {
     rect2 aabb = framed_rect_pdim(p, dim, frame);
     
@@ -66,32 +66,32 @@ static Button *add_button(rect2 *aabbs, Button *buttons, s32 *count, rect2 frame
     button.set_to = set_to;
     button.actual = actual;
     
-    aabbs[*count] = aabb;
-    Button *result = buttons + *count;
+    page->button_aabbs[page->button_count] = aabb;
+    Button *result = page->buttons + page->button_count;
     *result = button;
     
-    *count += 1;
+    page->button_count += 1;
     
     return result;
 }
 
-static Toggle *add_toggle(rect2 *aabbs, Toggle *toggles, s32 *count, rect2 frame,
+static Toggle *add_toggle(Menu_Page *page, rect2 frame,
                           v2 p, v2 dim, bool *actual) {
     rect2 aabb = framed_rect_pdim(p, dim, frame);
     
     Toggle toggle;
     toggle.actual = actual;
     
-    aabbs  [*count] =   aabb;
-    Toggle *result = toggles + *count;
+    page->toggle_aabbs[page->toggle_count] = aabb;
+    Toggle *result = page->toggles + page->toggle_count;
     *result = toggle;
     
-    *count += 1;
+    page->toggle_count += 1;
     
     return result;
 }
 
-static Dropdown *add_dropdown(rect2 *aabbs, Dropdown *dropdowns, s32 *count, rect2 frame,
+static Dropdown *add_dropdown(Menu_Page *page, rect2 frame,
                               v2 p, v2 dim, s32 option_count, any32 *actual,
                               s32 _default, Memory_Block *block) {
     ASSERT((s8)option_count == option_count);
@@ -110,31 +110,31 @@ static Dropdown *add_dropdown(rect2 *aabbs, Dropdown *dropdowns, s32 *count, rec
         *dropdown.actual = dropdown.options[dropdown.active].value;
     }
     
-    aabbs[*count] = aabb;
-    Dropdown *result = dropdowns + *count;
+    page->dropdown_aabbs[page->dropdown_count] = aabb;
+    Dropdown *result = page->dropdowns + page->dropdown_count;
     *result = dropdown;
     
-    *count += 1;
+    page->dropdown_count += 1;
     return result;
 }
 
-static Keybind *add_keybind(rect2 *aabbs, Keybind *keybinds, s32 *count, rect2 frame,
+static Keybind *add_keybind(Menu_Page *page, rect2 frame,
                             v2 p, v2 dim, u32 *actual) {
     rect2 aabb = framed_rect_pdim(p, dim, frame);
     
     Keybind keybind;
     keybind.actual = actual;
     
-    aabbs[*count] = aabb;
-    Keybind *result = keybinds + *count;
+    page->keybind_aabbs[page->keybind_count] = aabb;
+    Keybind *result = page->keybinds + page->keybind_count;
     *result = keybind;
     
-    *count += 1;
+    page->keybind_count += 1;
     
     return result;
 }
 
-static Menu_Label *add_label(Menu_Label *labels, s32 *count, rect2 frame,
+static Menu_Label *add_label(Menu_Page *page, rect2 frame,
                              v2 p, f32 pixel_height, string s, s8 font, bool centered) {
     Menu_Label label;
     
@@ -144,31 +144,62 @@ static Menu_Label *add_label(Menu_Label *labels, s32 *count, rect2 frame,
     label.font = font;
     label.centered = centered;
     
-    Menu_Label *result = labels + *count;
+    Menu_Label *result = page->labels + page->label_count;
     *result = label;
-    *count += 1;
+    page->label_count += 1;
     
     return result;
 }
 
-static Dropdown_Option *add_dropdown_options(Dropdown_Option *options, s32 *count,
-                                             Dropdown_Option *to_add, s32 add_count) {
-    Dropdown_Option *result = options + *count;
+struct Menu_Page {
+    union {
+        struct {
+            rect2 *  button_aabbs;
+            rect2 *  toggle_aabbs;
+            rect2 *dropdown_aabbs;
+            rect2 *  slider_aabbs;
+            rect2 * keybind_aabbs;
+        };
+        rect2 *aabbs_by_type[WIDGET_TYPE_COUNT - 1];
+    };
     
-    FORI(0, add_count) {
-        result[i] = to_add[i];
-    }
+    union {
+        struct {
+            s32   button_count;
+            s32   toggle_count;
+            s32 dropdown_count;
+            s32   slider_count;
+            s32  keybind_count;
+        };
+        s32 counts_by_type[WIDGET_TYPE_COUNT - 1];
+    };
     
-    *count += add_count;
-    return result;
+    Slider     *sliders;
+    Button     *buttons;
+    Toggle     *toggles;
+    Dropdown *dropdowns;
+    Keybind   *keybinds;
+    
+    Menu_Label *labels;
+    s32    label_count;
+};
+static void menu_page_init(Memory_Block *block, Menu_Page *page,
+                           s32 button_count, s32 toggle_count, s32 dropdown_count, s32 slider_count, s32 keybind_count) {
+    page->button_aabbs = push_array(block, rect2, button_count);
+    page->buttons = push_array(block, Slider, button_count);
+    page->toggle_aabbs = push_array(block, rect2, toggle_count);
+    page->toggles = push_array(block, Slider, toggle_count);
+    page->dropdown_aabbs = push_array(block, rect2, dropdown_count);
+    page->dropdowns = push_array(block, Slider, dropdown_count);
+    page->slider_aabbs = push_array(block, rect2, slider_count);
+    page->sliders = push_array(block, Slider, slider_count);
+    page->keybind_aabbs = push_array(block, rect2, keybind_count);
+    page->keybinds = push_array(block, Slider, keybind_count);
 }
 
-static void update_menu(Menu *menu, Rendering_Info *render, Input *in, Program_State *program_state) {
-    v2 pixel_to_unit_scale = get_pixel_to_unit_scale(render);
-    v2 cursor_p = v2_hadamard_prod(V2(program_state->cursor_position_in_pixels), pixel_to_unit_scale);
-    
+static void update_menu(Menu *menu, v2 cursor_p_unit_scale, Input *in, Program_State *program_state) {
     auto          *page = menu->pages + menu->current_page;
-    v2 cursor_p_clamped = v2_clamp(cursor_p, 0.0f, 1.0f);
+    v2 cursor_p_clamped = v2_clamp(cursor_p_unit_scale, 0.0f, 1.0f);
     auto    interaction = menu->interaction;
     Interaction   hover = make_interaction();
     
@@ -304,9 +335,11 @@ static void update_menu(Menu *menu, Rendering_Info *render, Input *in, Program_S
     menu->hover = hover;
 }
 
-void Implicit_Context::draw_menu(Menu *menu, Game_Client *g_cl, Rendering_Info *render_info, Text_Info *text_info) {
-    const f32 inv_render_target_height = 1.0f / render_info->render_target_dim.y;
+void Implicit_Context::draw_menu(Menu *menu, Game_Client *g_cl, Renderer *renderer, Text_Info *text_info, f32 render_target_height) {
+#if 0
+    const f32 inv_render_target_height = 1.0f / render_target_height;
     
+#if 0
     if(menu->should_display_text) {
         f32 line_advance        = text_font_line_advance(text_info, FONT_REGULAR);
         f32 line_advance_scaled = line_advance * 56.0f * inv_render_target_height;
@@ -316,6 +349,7 @@ void Implicit_Context::draw_menu(Menu *menu, Game_Client *g_cl, Rendering_Info *
         at.y -= line_advance_scaled;
         text_add_string(text_info, render_info, STRING("Press Escape when you are done."), at, 0.1f, FONT_FANCY, true);
     }
+#endif
     
     auto              page = menu->pages + menu->current_page;
     const auto interaction = menu->interaction;
@@ -337,7 +371,7 @@ void Implicit_Context::draw_menu(Menu *menu, Game_Client *g_cl, Rendering_Info *
                 color = hover_color;
             }
             
-            queue_quad_minmax(render_info, render_info->blank_texture_id, aabb.min, aabb.max, color);
+            render_quad(&renderer->command_queue, make_quad_instance_minmax(aabb.min, aabb.max, color));
         }
     }
     
@@ -356,7 +390,7 @@ void Implicit_Context::draw_menu(Menu *menu, Game_Client *g_cl, Rendering_Info *
                 color = color * 0.5f + hover_color * 0.5f;
             }
             
-            queue_quad_minmax(render_info, render_info->blank_texture_id, aabb.min, aabb.max, color);
+            render_quad(&renderer->command_queue, make_quad_instance_minmax(aabb.min, aabb.max, color));
         }
     }
     
@@ -373,12 +407,13 @@ void Implicit_Context::draw_menu(Menu *menu, Game_Client *g_cl, Rendering_Info *
                 color = hover_color;
             }
             
-            queue_quad_minmax(render_info, render_info->blank_texture_id, aabb.min, aabb.max, color);
+            render_quad(&renderer->command_queue, make_quad_instance_minmax(aabb.min, aabb.max, color));
             
             // Only draw this label if the dropdown isn't expanded.
             if((interaction.type != WIDGET_TYPE_DROPDOWN) || (interaction.index != i)) {
                 // @Hardcoded :DropdownLabels
-                text_add_string(text_info, render_info, label, V2(aabb.left + 0.02f / GAME_ASPECT_RATIO, aabb.bottom + 0.035f), 0.07f, FONT_REGULAR);
+                // :ReenableText
+                // text_add_string(text_info, render_info, label, V2(aabb.left + 0.02f / GAME_ASPECT_RATIO, aabb.bottom + 0.035f), 0.07f, FONT_REGULAR);
             }
         }
     }
@@ -399,8 +434,8 @@ void Implicit_Context::draw_menu(Menu *menu, Game_Client *g_cl, Rendering_Info *
             v2 left_max  = V2(split, aabb.   top);
             v2 right_min = V2(split, aabb.bottom);
             
-            queue_quad_minmax(render_info, render_info->blank_texture_id,  aabb.min, left_max, V4(0.0f, 1.0f, 0.0f, 1.0f));
-            queue_quad_minmax(render_info, render_info->blank_texture_id, right_min, aabb.max, empty_color);
+            render_quad(&renderer->command_queue, make_quad_instance_minmax(aabb.min, left_max, V4(0.0f, 1.0f, 0.0f, 1.0f)));
+            render_quad(&renderer->command_queue, make_quad_instance_minmax(right_min, aabb.max, empty_color));
         }
     }
     
@@ -415,14 +450,15 @@ void Implicit_Context::draw_menu(Menu *menu, Game_Client *g_cl, Rendering_Info *
                 color = hover_color;
             }
             
-            queue_quad_minmax(render_info, render_info->blank_texture_id, aabb.min, aabb.max, color);
+            render_quad(&renderer->command_queue, make_quad_instance_minmax(aabb.min, aabb.max, color));
         }
     }
     
     { // Labels.
         FORI(0, page->label_count) {
             Menu_Label *label = page->labels + i;
-            text_add_string(text_info, render_info, label->s, label->p, label->pixel_height, label->font, label->centered);
+            // :ReenableText
+            // text_add_string(text_info, render_info, label->s, label->p, label->pixel_height, label->font, label->centered);
         }
     }
     
@@ -441,11 +477,15 @@ void Implicit_Context::draw_menu(Menu *menu, Game_Client *g_cl, Rendering_Info *
                 } else if(i == dropdown.hover) {
                     color = hover_color;
                 }
-                queue_quad_minmax(render_info, render_info->blank_texture_id, option_aabb.min, option_aabb.max, color);
+                render_quad(&renderer->command_queue, make_quad_instance_minmax(option_aabb.min, option_aabb.max, color));
                 
                 // :DropdownLabels @Hardcoded! Need colors at least.
-                text_add_string(text_info, render_info, option->label, V2(option_aabb.left + 0.02f / GAME_ASPECT_RATIO, option_aabb.bottom + 0.035f), 0.07f, FONT_REGULAR, false);
+                // :ReenableText
+                // text_add_string(text_info, render_info, option->label, V2(option_aabb.left + 0.02f / GAME_ASPECT_RATIO, option_aabb.bottom + 0.035f), 0.07f, FONT_REGULAR, false);
             }
         }
     }
+    
+    maybe_flush_draw_commands(&renderer->command_queue);
+#endif
 }

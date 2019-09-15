@@ -1,4 +1,56 @@
 
+static void audio_init(Audio_Info *audio_info, Memory_Block *memory_block, s32 output_hz, s32 output_channels, s32 core_count) {
+    // This should not necessarily be the total number of cores on the machine. Rather, it
+    // should be the number of threads we want working on audio jobs at the same time.
+    audio_info->core_count = core_count;
+    
+    // Processing buffers:
+    audio_info->temp_buffer = push_array(memory_block, f32  , output_hz      );
+    audio_info->mix_buffers = push_array(memory_block, f32 *, output_channels);
+    for(s32 i = 0; i < output_channels; ++i) {
+        audio_info->mix_buffers[i] = push_array(memory_block, f32, output_hz);
+    }
+    audio_info->out_buffer = push_array(memory_block, s16, output_hz * output_channels);
+    audio_info->channel_count = (u8)output_channels;
+    init(&audio_info->loads, memory_block);
+    
+    // Chunk buffers:
+    Audio_Page_Identifier bad_id;
+    bad_id.all = 0xFFFFFFFFFFFFFFFF;
+    for(s32 i = 0; i < MAX_SOUND_COUNT * 2; ++i) {
+        audio_info->audio_pages[i] = push_array(memory_block, s16, AUDIO_PAGE_SIZE + 1);
+        audio_info->audio_page_ids[i] = bad_id;
+    }
+    
+    { // Threaded read bitfield:
+        Audio_Load_Queue **queues = push_array(memory_block, Audio_Load_Queue *, core_count);
+        FORI(0, core_count) {
+            queues[i] = push_struct(memory_block, Audio_Load_Queue, CACHE_LINE_SIZE);
+        }
+        audio_info->load_queues = queues;
+        push_size(memory_block, 0, 64);
+        
+        audio_info->last_gather_first_frees = push_array(memory_block, s32, core_count);
+    }
+    
+    // We're assuming current_volume was initialised when loading the config.
+    audio_info->target_volume.master                            = audio_info->current_volume.master;
+    audio_info->target_volume.by_category[AUDIO_CATEGORY_SFX  ] = audio_info->current_volume.by_category[AUDIO_CATEGORY_SFX  ];
+    audio_info->target_volume.by_category[AUDIO_CATEGORY_MUSIC] = audio_info->current_volume.by_category[AUDIO_CATEGORY_MUSIC];
+    
+    // When we get to unloading sounds, be sure to reset these values to -1.
+    FORI(0, SOUND_UID_COUNT) {
+        audio_info->sounds_by_uid[i] = -1;
+    }
+    FORI(0, PLAYING_SOUND_HANDLE_BITFIELD_SIZE) {
+        audio_info->free_commands[i] = 0xFFFFFFFFFFFFFFFF;
+    }
+    FORI(0, MAX_SOUND_COUNT) {
+        audio_info->play_commands[i].old_volume = push_array(memory_block, f32, output_channels);
+        audio_info->play_commands[i].volume = push_array(memory_block, f32, output_channels);
+    }
+}
+
 // This function does not have to return 0 for vol = 0.
 // Instead, silent sounds should be flagged.
 static inline f32 linear_to_exp(f32 vol) {
@@ -61,13 +113,50 @@ static s16 find_existing_audio_page(Audio_Info *audio, s16 chunk_index, s16 chan
     }
 }
 
-static inline void load_chunk(Asset_Location location, s16 *samples, s32 chunk_index, s32 channel_count, s32 channel_index) {
-    const s32 bytes_per_chunk = SAMPLES_PER_CHUNK * sizeof(s16);
-    os_platform.read_file(location.file_handle, samples,
-                          location.offset + sizeof(FACS_Header) +
-                          bytes_per_chunk * channel_count * chunk_index +
-                          bytes_per_chunk * channel_index,
-                          bytes_per_chunk);
+void Implicit_Context::load_chunk(Loaded_Sound *loaded, s16 *samples, s32 chunk_index, s32 channel_index) { SCOPE_MEMORY(&temporary_memory);
+    u64      chunk_offset = loaded->chunk_offsets_in_file[chunk_index * loaded->channel_count + channel_index];
+    u64 next_chunk_offset = loaded->chunk_offsets_in_file[chunk_index * loaded->channel_count + channel_index + 1];
+    u8 *scratch = push_array(&temporary_memory, u8, next_chunk_offset - chunk_offset);
+    
+    os_platform.read_file(loaded->streaming_data.file_handle, scratch,
+                          loaded->streaming_data.offset + chunk_offset,
+                          next_chunk_offset - chunk_offset);
+    
+    { // Decoding
+        bitreader reader = make_bitreader(scratch);
+        u32 decoded_samples = 0;
+        u32 last_samples = 0;
+        while(decoded_samples < SAMPLES_PER_CHUNK) {
+            s32 run_length      = read_bits(&reader, UVGA_CODING_CHOICE_RUN_LENGTH_BITS).s + 1;
+            s32 bits_per_sample = read_bits(&reader, UVGA_CODING_CHOICE_BITS_PER_SAMPLE_BITS).s;
+            
+            
+            s32 bias = (1 << bits_per_sample);
+            u32 clamp_mask = bias - 1;
+            u32 sign_shift = 16 - bits_per_sample;
+            FORI_TYPED(s32, 0, run_length) {
+                u32 bits = read_bits(&reader, bits_per_sample).u;
+                
+                s16 grad = CAST(s16, (bias + bits) & clamp_mask);
+                {
+                    s16 temp_shift = grad << sign_shift;
+                    s16 sign_extended = temp_shift >> sign_shift;
+                    grad = sign_extended;
+                }
+                
+                s16 last_sample0 = last_samples & 0xFFFF;
+                s16 last_sample1 = CAST(s16, last_samples >> 16);
+                
+                s16 sample = CAST(s16, grad + last_sample0 * 2 - last_sample1);
+                
+                samples[decoded_samples + i] = sample;
+                last_samples = sll(last_samples, 16) | sample;
+            }
+            
+            decoded_samples += run_length;
+            ASSERT(decoded_samples <= SAMPLES_PER_CHUNK);
+        }
+    }
 }
 
 #define UNPACK_AUDIO_CHUNK_JOB_VARIABLES \
@@ -81,7 +170,7 @@ THREAD_JOB_PROC(load_unbatched_first_audio_chunk_job) {
     Audio_Load_Queue *queue = audio->load_queues[thread_index];
     s32 first_free = queue->first_free;
     
-    load_chunk(loaded->streaming_data, audio->audio_pages[page], payload->chunk_index, loaded->channel_count, payload->channel_index);
+    load_chunk(loaded, audio->audio_pages[page], payload->chunk_index, payload->channel_index);
     
     // We're a mono sound; just queue it.
     queue->buffered[first_free] = page;
@@ -95,9 +184,9 @@ THREAD_JOB_PROC(load_batched_first_audio_chunk_job) {
     Audio_Load_Queue *queue = audio->load_queues[thread_index];
     s32 first_free = queue->first_free;
     
-    load_chunk(loaded->streaming_data, audio->audio_pages[page], payload->chunk_index, loaded->channel_count, payload->channel_index);
+    load_chunk(loaded, audio->audio_pages[page], payload->chunk_index, payload->channel_index);
     
-    s32 other_sounds_to_load = ATOMIC_INC32((volatile long *)(audio->load_syncs + sync));
+    s32 other_sounds_to_load = ATOMIC_INC32(CAST(volatile long*, audio->load_syncs + sync));
     if(!other_sounds_to_load) {
         // The whole batch is ready; queue it.
         auto *batch = audio->load_batches + sync;
@@ -116,29 +205,45 @@ THREAD_JOB_PROC(load_unbatched_next_audio_chunk_job) {
     TIME_BLOCK;
     UNPACK_AUDIO_CHUNK_JOB_VARIABLES;
     // We may want to zero_mem the samples first, just in case we don't manage to load in time.
-    load_chunk(loaded->streaming_data, audio->audio_pages[page], payload->chunk_index, loaded->channel_count, payload->channel_index);
+    load_chunk(loaded, audio->audio_pages[page], payload->chunk_index, payload->channel_index);
 }
 #undef UNPACK_AUDIO_CHUNK_JOB_VARIABLES
 
-static inline void load_sound_info(Loaded_Sound *loaded, Asset_Location *location, FACS_Header *facs, u8 category) {
-    ASSERT((facs->sample_rate == 44100) &&
-           (facs->chunk_size == UNPADDED_SAMPLES_PER_CHUNK) &&
-           (facs->bytes_per_sample == 2) &&
-           (facs->encoding_flags & FACS_ENCODING_FLAGS_SAMPLE_INTERPOLATION_PADDING));
+static inline void load_sound_info(Loaded_Sound *loaded, Asset_Location *location, UVGA_Header *header, u8 category) {
+    ASSERT((header->sample_rate == 44100) &&
+           (header->samples_per_chunk == SAMPLES_PER_CHUNK) &&
+           (header->bytes_per_sample == 2));
+    
+    // :UVGARefactor
+    // We need to load the file's metadata; in this case, it's only the header and the chunk offsets.
+    // Since their size is not known ahead of time, it means we need to actually have some memory
+    // allocations in the audio mixer.
+    // :DatapackRefactor
+    // One way to avoid this is to load all the asset metadata on startup.
     
     loaded->streaming_data = *location;
-    loaded->chunk_count = facs->chunk_count;
-    loaded->channel_count = facs->channel_count;
+    loaded->chunks_per_channel = header->chunks_per_channel;
+    loaded->channel_count = header->channel_count;
 }
 
 static s16 _load_music(Audio_Info *audio, Datapack_Handle *pack, u32 asset_uid, u32 sound_uid) {
     ASSERT(sound_uid != SOUND_UID_unloaded);
     Asset_Location location = get_asset_location(pack, asset_uid);
     
-    FACS_Header header;
-    os_platform.read_file(pack->file_handle, &header, location.offset, sizeof(FACS_Header));
+    UVGA_Header header;
+    os_platform.read_file(pack->file_handle, &header, location.offset, sizeof(UVGA_Header));
     
     Loaded_Sound loaded = {};
+    { // :DatapackRefactor @Duplication We load all of the chunk offsets on startup.
+        s32 chunk_count = header.chunks_per_channel * header.channel_count;
+        s32 offsets_to_load = chunk_count + 1;
+        ASSERT((audio->used_chunk_offsets + chunk_count) < (MAX_SOUND_COUNT * 4096));
+        
+        loaded.chunk_offsets_in_file = audio->chunk_offset_pool + audio->used_chunk_offsets;
+        os_platform.read_file(pack->file_handle, loaded.chunk_offsets_in_file, location.offset + sizeof(UVGA_Header), sizeof(u64) * offsets_to_load);
+        
+        audio->used_chunk_offsets += offsets_to_load;
+    }
     load_sound_info(&loaded, &location, &header, AUDIO_CATEGORY_MUSIC);
     
     Loaded_Sound *added = add(&audio->loads, &loaded);
@@ -148,18 +253,25 @@ static s16 _load_music(Audio_Info *audio, Datapack_Handle *pack, u32 asset_uid, 
     
     return result;
 }
-#define LOAD_MUSIC(audio_info, datapack, tag) _load_music(audio_info, datapack, ASSET_UID_##tag##_stereo_facs, SOUND_UID_##tag)
+#define LOAD_MUSIC(audio_info, datapack, tag) _load_music(audio_info, datapack, ASSET_UID_##tag##_stereo_uvga, SOUND_UID_##tag)
 
 static s16 _load_sound(Audio_Info *audio, Datapack_Handle *pack, u32 asset_uid, u32 sound_uid) {
     ASSERT(sound_uid != SOUND_UID_unloaded);
     Asset_Location location = get_asset_location(pack, asset_uid);
     
-    FACS_Header header;
-    os_platform.read_file(pack->file_handle, &header, location.offset, sizeof(FACS_Header));
+    UVGA_Header header;
+    os_platform.read_file(pack->file_handle, &header, location.offset, sizeof(UVGA_Header));
     
     // Sounds are mono.
     ASSERT(header.channel_count == 1);
     Loaded_Sound loaded = {};
+    { // :DatapackRefactor @Duplication We load all of the chunk offsets on startup.
+        s32 chunk_count = header.chunks_per_channel * header.channel_count;
+        ASSERT((audio->used_chunk_offsets + chunk_count) < (MAX_SOUND_COUNT * 4096));
+        loaded.chunk_offsets_in_file = audio->chunk_offset_pool + audio->used_chunk_offsets;
+        audio->used_chunk_offsets += chunk_count;
+        os_platform.read_file(pack->file_handle, &header, location.offset + sizeof(UVGA_Header), sizeof(u64) * chunk_count);
+    }
     load_sound_info(&loaded, &location, &header, AUDIO_CATEGORY_SFX);
     
     Loaded_Sound *added = add(&audio->loads, &loaded);
@@ -196,7 +308,7 @@ static s32 find_first_free_and_unset_bit(u64 *bitfields, ssize count) {
 static void _play_sound(Audio_Info *audio, s16 loaded_id, s32 channel_index, s16 handle, s16 sync) {
     ASSERT(loaded_id != -1);
     Loaded_Sound *loaded = audio->loads.items + loaded_id;
-    s32 chunk_count = loaded->chunk_count;
+    s32 chunk_count = loaded->chunks_per_channel;
     bool same_id0 = false;
     bool same_id1 = false;
     
@@ -592,7 +704,7 @@ s16 *Implicit_Context::update_audio(Audio_Info *audio, const s32 samples_to_play
             s16 next_chunk_to_load = chunk_index + 2;
             s16 next_page_to_load = 0;
             
-            if(next_chunk_to_load < loaded->chunk_count) {
+            if(next_chunk_to_load < loaded->chunks_per_channel) {
                 bool same_id;
                 next_page_to_load = find_audio_page(audio, next_chunk_to_load, channel_index, load, &same_id);
                 audio->audio_page_uses[next_page_to_load] += 1;
@@ -607,7 +719,7 @@ s16 *Implicit_Context::update_audio(Audio_Info *audio, const s32 samples_to_play
                     audio->load_payloads[next_page_to_load] = payload;
                     os_platform.add_thread_job(&Implicit_Context::load_unbatched_next_audio_chunk_job, (void *)(audio->load_payloads + next_page_to_load));
                 }
-            } else if(next_chunk_to_load > loaded->chunk_count) {
+            } else if(next_chunk_to_load > loaded->chunks_per_channel) {
                 s16 add = audio->play_retire_count;
                 audio->plays_to_retire[add] = play;
                 audio->play_retire_count += 1;

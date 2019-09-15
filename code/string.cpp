@@ -405,3 +405,40 @@ static bool append_string(string *s, string append, usize max_length) {
         return false;
     }
 }
+
+static bool append(String_Builder *builder, const char *format, ...) {
+    char *varargs;
+    BEGIN_VARARG(varargs, format);
+    
+    usize printed = _print(CAST(char *, builder->buffer.data + builder->written), builder->buffer.length, format, varargs);
+    builder->written += printed;
+    
+    return builder->written == builder->buffer.length;
+}
+
+static bool append_bytes(String_Builder *builder, u8 *data, usize length) {
+    usize new_length = builder->written + length;
+    if(new_length <= builder->buffer.length) {
+        mem_copy(data, builder->buffer.data + builder->written, length);
+        builder->written = new_length;
+        
+        return true;
+    } else {
+        return false;
+    }
+}
+
+static void* reserve_bytes(String_Builder* builder, usize length) {
+    if((builder->written + length) <= builder->buffer.length) {
+        void* result = builder->buffer.data + builder->written;
+        builder->written += length;
+        return result;
+    } else {
+        return 0;
+    }
+}
+#define RESERVE_STRUCT(string_builder, type) ((type*)reserve_bytes((string_builder), sizeof(type)))
+
+static inline string extract(String_Builder *builder) {
+    return make_string(builder->buffer.data, builder->written);
+}

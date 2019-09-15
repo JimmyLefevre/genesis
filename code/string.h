@@ -25,3 +25,14 @@ struct Encoding_Result {
     Character c;
     u32 characters_encoded;
 };
+
+struct String_Builder {
+    string buffer;
+    usize written;
+};
+static inline String_Builder make_string_builder(string s) {
+    String_Builder result;
+    result.buffer = s;
+    result.written = 0;
+    return result;
+}

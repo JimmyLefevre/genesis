@@ -10,13 +10,18 @@
 
 #define LINE_VAR(name) PASTE(name, __LINE__)
 #define SWAP(a, b) {auto LINE_VAR(swap) = a; a = b; b = LINE_VAR(swap);}
-#define ALIGN_POW2(val, pow2) ((val) + ((pow2) - 1) & ((pow2) - 1))
+#define ALIGN_POW2(val, pow2) (((val) + ((pow2) - 1)) & (~((pow2) - 1)))
+#define ALIGN(val, a) ((a) * (((val) + (a) - 1) / (a)))
 #define WRITE_AND_ADVANCE_u8PTR(ptr, type, value) {*((type *)ptr) = value; ptr += sizeof(type);}
+
+#define ENUM(name) namespace name{enum name##_type;} enum name::name##_type
 
 #if GENESIS_DEV
 #define ASSERT(expression) if(!(expression)){*(int *)0 = 0;}
+#define CONDITIONAL_BREAKPOINT(condition) {if(condition){__debugbreak();}}
 #else
 #define ASSERT(expression)
+#define CONDITIONAL_BREAKPOINT(condition)
 #endif
 #define UNHANDLED ASSERT(false)
 
@@ -55,6 +60,14 @@ typedef unsigned __int64 u64;
 typedef          float   f32;
 typedef          double  f64;
 typedef          size_t  usize;
+
+#if _M_X64 || _M_X86
+#define LITTLE_ENDIAN 1
+#elif _M_ARM || _M_ARM64
+#define LITTLE_ENDIAN 0
+#else
+#error Unknown architecture.
+#endif
 
 #if _WIN64
 #define X64 1
@@ -107,41 +120,54 @@ typedef          double    f64;
 #define MiB(n) n*1048576ull
 #define GiB(n) n*1073741824ull
 
+#if __x86_64__
+#define LITTLE_ENDIAN 1
+#elif __ppc64__
+#define LITTLE_ENDIAN 0
+#elif __arm__
+#define LITTLE_ENDIAN 0
+#else
+#error Unknown architecture.
+#endif
 
 #if __x86_64__ || __ppc64__
 #define X64
-typedef s64 ptrdiff_t;
-typedef u64 usize;
-typedef s64 ssize;
 #else
 #define X32
-typedef s32 ptrdiff_t;
-typedef u32 usize;
-typedef s32 ssize;
 #endif
-typedef ptrdiff_t ssize_t;
+#else
+#error Unknown architecture.
 #endif
 #endif
 
 #ifdef X64
+#define CACHE_LINE_SIZE 64
 #define UPTR_MAX U64_MAX
 #define USIZE_MAX U64_MAX
 #define USIZE_SIZE 8
 #define USIZE_BITS 64
 #define USIZE_MSB (0x8000000000000000)
 #define PTRDIFF_SIZE 8
+typedef          u64      usize;
+typedef          s64      ssize;
 typedef          s64       sptr;
 typedef          u64       uptr;
 typedef          s64  ptrdiff_t;
 #elif X32
+#define CACHE_LINE_SIZE 64
 #define USIZE_MAX U32_MAX
 #define USIZE_SIZE 4
 #define USIZE_BITS 32
 #define PTRDIFF_SIZE 4
+typedef          u32      usize;
+typedef          s32      ssize;
 typedef          s32       sptr;
 typedef          u32       uptr;
 typedef          s32  ptrdiff_t;
+#else
+#error Unknown architecture.
 #endif
+typedef ptrdiff_t ssize_t;
 
 #define ASSERT_TYPE_SIZES { \
     ASSERT(sizeof(u8) == 1); \
@@ -184,10 +210,11 @@ typedef          s32  ptrdiff_t;
     element->next->prev = element; \
 }
 
+#ifndef USING_CRT
 extern "C" {
     void *memset(void *mem, int value, usize size);
     void *memcpy(void *to, const void *from, usize size);
-    int memcmp(const void *a, const void *b, usize size);
+    int   memcmp(const void *a, const void *b, usize size);
     
 #if OS_WINDOWS
 #pragma function(memset)
@@ -248,10 +275,10 @@ extern "C" {
         return 0;
     }
 }
+#endif
 static inline void zero_mem(void *mem, usize size) {
     memset(mem, 0, size);
 }
-
 static inline void mem_set(void *mem, s32 value, usize size) {
     memset(mem, value, size);
 }
@@ -335,16 +362,31 @@ iteration_step(structure, &_iterator##suffix))
 #define FORI_NAMED(i_name, low, high) FORI_TYPED_NAMED(ssize, i_name, low, high)
 #define FORI_TYPED(type, low, high) FORI_TYPED_NAMED(type, i, low, high)
 #define FORI(low, high) FORI_NAMED(i, low, high)
+// FORI_REVERSE is inclusive, because otherwise we get shifty behaviour when 0 is the iteration bound.
+// Maybe we should make FORI inclusive too, for consistency's sake?
+#define FORI_REVERSE_TYPED_NAMED(type, i_name, high, low) for(type i_name = (high); (i_name) >= (low); --i_name)
+#define FORI_REVERSE_NAMED(i_name, high, low) FORI_REVERSE_TYPED_NAMED(ssize, i_name, high, low)
+#define FORI_REVERSE_TYPED(type, high, low) FORI_REVERSE_TYPED_NAMED(type, i, high, low)
+#define FORI_REVERSE(high, low) FORI_REVERSE_NAMED(i, high, low)
 
-// @Untested
-#define _MIRROR_VARIABLE(struct_name, type, mirror_name, source_name) type mirror_name = source_name; struct{struct s{type *mirror;type *source;~s(){*s.source = *s.mirror;}};} struct_name;struct_name.s.mirror = &mirror_name;struct_name.s.source = &source_name;
+#define _MIRROR_VARIABLE(struct_name, type, mirror_name, source_name) \
+type mirror_name = *source_name; \
+struct{\
+    struct s{\
+        type *mirror;\
+        type *source;\
+        ~s(){\
+            *source = *mirror;\
+        }\
+    }s;\
+} struct_name;\
+struct_name.s.mirror = &mirror_name;\
+struct_name.s.source = source_name;
 #define MIRROR_VARIABLE(type, name, source) _MIRROR_VARIABLE(LINE_VAR(_mirror_variable), type, name, source)
 
 #define CAST(type, expr) ((type)(expr))
-
-#define readonly const
-#define INPUT(name, source) auto name = (source)
-#define OUTPUT(expr, dest) (dest) = (expr)
+// @Untested
+#define BITCAST(type, expr) (*((type*)(&(expr))))
 
 // Any
 
@@ -353,6 +395,12 @@ struct any32 {
         s32 s;
         u32 u;
         f32 f;
+        
+        s16 by_s16[2];
+        u16 by_u16[2];
+        
+        s8 by_s8[4];
+        u8 by_u8[4];
     };
 };
 inline any32 make_any32(s32 s) {
@@ -370,3 +418,53 @@ inline any32 make_any32(f32 f) {
     result.f = f;
     return result;
 }
+
+// @Temporary
+#define _PRINT_ARRAY(array, len, str, printed, i) FORI_NAMED(i, 0, n){printed += print(str.data + printed, str.length - printed, "%f\n", array[i]);}
+#define PRINT_ARRAY(array, len, str, printed) _PRINT_ARRAY(array, len, str, printed, LINE_VAR(i))
+
+#if LITTLE_ENDIAN
+static inline u16 read_u16_be(u16 *ptr) {
+    u16 result = (((u8 *)ptr)[0] << 8) + ((u8 *)ptr)[1];
+    return result;
+}
+static inline s16 read_s16_be(s16 *ptr) {
+    s16 result = (((u8 *)ptr)[0] << 8) + ((u8 *)ptr)[1];
+    return result;
+}
+static inline u32 read_u32_be(u32 *ptr) {
+    u32 result = (((u8 *)ptr)[0] << 24) + (((u8 *)ptr)[1] << 16) + (((u8 *)ptr)[2] << 8) + (((u8 *)ptr)[3]);
+    return result;
+}
+static inline u16 read_u16_le(u16 *ptr) {
+    return *ptr;
+}
+static inline s16 read_s16_le(s16 *ptr) {
+    return *ptr;
+}
+static inline u32 read_u32_le(u32 *ptr) {
+    return *ptr;
+}
+#else
+static inline u16 read_u16_le(u16 *ptr) {
+    u16 result = (((u8 *)ptr)[0] << 8) + ((u8 *)ptr)[1];
+    return result;
+}
+static inline s16 read_s16_le(s16 *ptr) {
+    s16 result = (((u8 *)ptr)[0] << 8) + ((u8 *)ptr)[1];
+    return result;
+}
+static inline u32 read_u32_le(u32 *ptr) {
+    u32 result = (((u8 *)ptr)[0] << 24) + (((u8 *)ptr)[1] << 16) + (((u8 *)ptr)[2] << 8) + (((u8 *)ptr)[3]);
+    return result;
+}
+static inline u16 read_u16_be(u16 *ptr) {
+    return *ptr;
+}
+static inline s16 read_s16_be(s16 *ptr) {
+    return *ptr;
+}
+static inline u32 read_u32_be(u32 *ptr) {
+    return *ptr;
+}
+#endif

@@ -99,7 +99,6 @@ static u8 render_add_atlas(Rendering_Info *info, u8 *data, u16 atlas_width, u16 
     ASSERT(add_atlas < MAX_ATLAS_COUNT);
     s16 base_texture_count = info->texture_count;
     
-    // @Speed: Maybe read directly from file instead?
     mem_copy(texture_framings, info->texture_framings + info->texture_count, sizeof(Texture_Framing) * texture_count);
     Texture_ID id;
     id.atlas = add_atlas;
@@ -108,7 +107,7 @@ static u8 render_add_atlas(Rendering_Info *info, u8 *data, u16 atlas_width, u16 
         out_ids[i] = id;
     }
     
-    info->atlas_handles[add_atlas] = glLoadBitmap(data, atlas_width, atlas_height);
+    info->atlas_handles[add_atlas] = upload_texture_to_gpu_rgba8(data, atlas_width, atlas_height);
     info->texture_count += texture_count;
     info->atlas_count = add_atlas + 1;
     return add_atlas;

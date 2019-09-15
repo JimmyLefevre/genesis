@@ -1,20 +1,6 @@
 
 #define VERTS_PER_CIRCLE 32
 
-enum Texture_Uid {
-    TEXTURE_UID_blank = 0,
-    TEXTURE_UID_untextured,
-    TEXTURE_UID_circle,
-    TEXTURE_UID_default_hitbox,
-    TEXTURE_UID_default_hurtbox,
-    TEXTURE_UID_default_solid,
-    TEXTURE_UID_player,
-    TEXTURE_UID_xhair,
-    TEXTURE_UID_grid_tile,
-    
-    TEXTURE_UID_COUNT,
-};
-
 enum Render_Entry_Type {
     RENDER_ENTRY_TYPE_NONE = 0,
     RENDER_ENTRY_TYPE_CLEAR,
@@ -123,7 +109,7 @@ struct Render_Entry {
     };
 };
 
-#define MAX_VERT_COUNT 16386
+#define MAX_VERT_COUNT 524288
 #define MAX_QUAD_COUNT (MAX_VERT_COUNT / 6)
 struct Render_Vertex {
     v2 p;
@@ -194,7 +180,7 @@ struct Rendering_Info {
     u32 atlas_handles[MAX_ATLAS_COUNT];
     Texture_Framing texture_framings[MAX_TEXTURE_COUNT];
     
-    Texture_ID textures_by_uid[TEXTURE_UID_COUNT];
+    Texture_ID *textures_by_uid;
     
     Texture_ID blank_texture_id;
     Texture_ID untextured_id;

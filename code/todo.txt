@@ -2,16 +2,24 @@
 //
 // CURRENT:
 //
-Compression:
-- Audio: Make a fast MDCT based on our FFT.
--   Make FACS interpolation padding take the last sample's place instead of being appended to the chunk.
-- Textures.
-Start managing assets:
-- We need to change the currently-playing music when loading a new level.
+Graphics:
+- Add a layer picker to the mesh tool.
+- Add a mesh  picker to the mesh tool.
+- When editing a layer, add a key to make other layers transparent or invisible.
+- Add a way to save meshes.
+- Enable depth testing.
+- @Speed: Make list handles be straight pointers to the command lists.
+- Deal with D3D12 flickering on some frames; this probably has to do with the fact that we're single buffering our frames and not interleaving command queues/lists.
+- (How does sRGB work in d3d12?)
+
+Audio:
+- Instruments: Either make our own and have some way to select them for each MIDI track, or embed them into the Synth_Input.
+- Note velocity.
+- SIMD waveform generators.
 
 
 //
-// BUGS/IMPORTANT:
+// ISSUES:
 //
 - DSound initialisation makes it tricky to play sound right after starting.
 
@@ -43,6 +51,12 @@ Controls:
 //
 // ENGINE:
 //
+Gracefully handle different amounts of output audio channels.
+
+Differenciate between GENESIS_DEV and a new GENESIS_DEBUG flag.
+
+Read Synth1 config files???
+
 UI:
 - Automatic layouts for widget lists, etc.
 -   place_cursor, xstep, ystep, xmod, ymod, xstep_on_y_overflow, ystep_on_x_overflow?
@@ -57,11 +71,6 @@ Audio:
 - Music crossfading.
 
 Platform:
-- Handle GL extensions (not) being there:
--   Close for missing pixel_format.
--   Give vsync option when available.
--   Enable sRGB when available; maybe use a fallback shader otherwise?
--   ...or switch to D3D.
 - Get resolution options (GetDeviceCaps/EnumDisplaySettings/EnumDisplayMonitors, GetMonitorInfo).
 -   Actually, we should probably have a set of resolution options independent from the monitor's and
 -   only present the ones smaller than the monitor's current resolution, as in:
@@ -74,26 +83,18 @@ Architecture:
 -   Right now, we're doing the first of these two; perhaps we'd like to assume the vsync framerate up to a safety margin?
 - Dynamic rendering, etc. in order to always hit framerate.
 
-Rendering:
-- Instancing + vertex shader to make each quad a 4 vertex triangle strip.
-- Layers: Sort draw calls by layer, then shader, then texture or something like that.
-- Segregate GL code.
-
 //
 // RESOURCES:
 //
 Assets:
+- Associate music with levels.
 - Level loading/unloading.
 - Level editor.
 - Language packs.
--   Non-alphabet languages may use a combination of letters (for regular keys) and non-letters (for text and special keys like arrow keys, etc.).
+-   For keyboard keys, non-alphabet languages may use a combination of letters (for regular keys) and non-letters (for text and special keys like arrow keys, etc.).
 
 //
 // EXTRA:
 //
-Research:
-- Text supersampling: instead of having fully subpixel rasterisation, have 4 subpixel offsets in each direction and lerp between them.
-
-[X] Nolib:
 - Optionally load shlwapi(FilePathExistsW), winmm(timeBeginPeriod) at run-time and stop linking to them.
 - Note: The first of these functions should not be used by release anyway.

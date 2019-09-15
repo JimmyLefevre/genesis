@@ -4,11 +4,10 @@ REM call "..\..\tools\msvc.bat"
 
 set ProjectName=genesis
 set DevFlag=1
-set BuildAssetsOnStartupFlag=1
 
 set CommonCompilerFlags= -Od -nologo -fp:fast -fp:except- -Gm- -GR- -EHa- -Zo -Oi -WX -W4 -wd4201 -wd4505 -wd4127 -wd4100 -FC -Z7
 REM Custom compiler flags
-set CommonCompilerFlags=%CommonCompilerFlags% -DGENESIS_DEV=%DevFlag% -DGENESIS_BUILD_ASSETS_ON_STARTUP=%BuildAssetsOnStartupFlag%
+set CommonCompilerFlags=%CommonCompilerFlags% -DGENESIS_DEV=%DevFlag%
 REM These flags act more as linter flags: static analysis and unreferenced local variables
 REM set CommonCompilerFlags=-analyze %CommonCompilerFlags%
 set CommonCompilerFlags=-wd4189 %CommonCompilerFlags%
@@ -28,6 +27,8 @@ REM cl %CommonCompilerFlags% ..\..\%ProjectName%\code\win_main.cpp /link -subsys
 
 REM 64-bit build
 REM Optimization switches /wO2
-cl %CommonCompilerFlags% ..\..\%ProjectName%\code\win_main.cpp %NoCRTCompilerFlags% -Fewin_%ProjectName%.exe -Fm /link %CommonLinkerFlags% %NoCRTLinkerFlags% kernel32.lib user32.lib gdi32.lib winmm.lib shlwapi.lib
+REM cl %CommonCompilerFlags% ..\..\%ProjectName%\code\win_main.cpp %NoCRTCompilerFlags% -Fewin_%ProjectName%.exe -Fm /link %CommonLinkerFlags% %NoCRTLinkerFlags% kernel32.lib user32.lib gdi32.lib winmm.lib shlwapi.lib D3D12.lib DXGI.lib
 cl %CommonCompilerFlags% -MTd ..\..\%ProjectName%\code\game.cpp -Fe%ProjectName% -Fd -LDd -Fm %NoCRTCompilerFlags% /link -PDB:%ProjectName%%random%.pdb %NoCRTLinkerFlags% %CommonLinkerFlags% -EXPORT:g_get_api
+
+REM cl %CommonCompilerFlags% ..\..\%ProjectName%\code\datapacker.cpp /link %CommonLinkerFlags% kernel32.lib user32.lib
 popd

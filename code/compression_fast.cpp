@@ -132,6 +132,31 @@ static inline s32 decode_mod_bytewise_bits(u8 **_at, const s32 bits) {
     return result;
 }
 
+static inline usize match_length_upto(u8 *a, u8 *b, const usize max_length) {
+    usize scanned = 0;
+    
+    while(scanned < max_length) {
+        const __m128i av = _mm_loadu_si128(CAST(__m128i *, a + scanned));
+        const __m128i bv = _mm_loadu_si128(CAST(__m128i *, b + scanned));
+        
+        const __m128i eq = _mm_cmpeq_epi8(av, bv);
+        u32 match = _mm_movemask_epi8(eq);
+        
+        if(match == 0xFFFF) {
+            scanned += 16;
+        } else { // We found a difference.
+            while((match & 1) && (scanned < max_length)) {
+                match >>= 1;
+                ++scanned;
+            }
+            
+            return scanned;
+        }
+    }
+    
+    return max_length;
+}
+
 static void maybe_update_best_match(u8 **match_string_hash, u32 *match_string_check, const u32 hash_ways,
                                     u8 *at, u32 hash, u32 lookup, usize bytes_left,
                                     u8 **possible_matches, u32 *possible_match_lengths, u8 *possible_match_count, u8 **min_match, bool *updated_min) {
@@ -150,7 +175,7 @@ static void maybe_update_best_match(u8 **match_string_hash, u32 *match_string_ch
             ssize this_match_offset = at - this_match;
             
             if(this_match_offset > 0) {
-                ssize this_match_length = string_match_length_upto(at, this_match, bytes_left);
+                ssize this_match_length = match_length_upto(at, this_match, bytes_left);
                 ASSERT(this_match_length <= S32_MAX);
                 
                 s32 this_min_match_length = MIN_MATCH_LENGTH;
@@ -249,6 +274,8 @@ static string fastcomp_compress(string source, Memory_Block *work_memory) {
     s32 *best_costs_to_end_by_row = push_array(work_memory, s32, PARSE_BLOCK_LENGTH);
     Coding_Choice *best_choices   = push_array(work_memory, Coding_Choice, PARSE_BLOCK_LENGTH);
     
+    zero_mem(match_table_matches, sizeof(u8 *) * match_table_length * HASH_WAYS);
+    
     string result;
     result.data = work_memory->mem + work_memory->used;
     u8 *encoding_at = result.data;
@@ -301,6 +328,7 @@ static string fastcomp_compress(string source, Memory_Block *work_memory) {
                             insert_hash = hash;
                         }
                         
+                        // @Speed: We could make this a circular buffer instead.
                         for(s32 i = HASH_WAYS - 1; i > 0; --i) {
                             match_table_matches[min_lookup * HASH_WAYS + i] = match_table_matches[min_lookup * HASH_WAYS + i-1];
                             match_table_checks[min_lookup * HASH_WAYS + i] = match_table_checks[min_lookup * HASH_WAYS + i-1];
@@ -335,7 +363,8 @@ static string fastcomp_compress(string source, Memory_Block *work_memory) {
                         s32 check_lrl = lrl_state + 1;
                         s32 check_byte_in_block = byte_in_block + 1;
                         
-                        // @Hack: Not technically correct, but good enough.
+                        // @Hack: We only bump up the encoding cost when the literal run gets to MAX_HEADER_LRL,
+                        // not for further multiples of it. Not technically correct, but good enough.
                         u16 cost = 1;
                         if(check_lrl == (MAX_HEADER_LRL)) {
                             ++cost;

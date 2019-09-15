@@ -1,4 +1,8 @@
 
+//
+// WAV
+//
+
 static Sound_Asset load_wav(string name) {
     Sound_Asset result = {};
     s16 *read_data = 0;
@@ -38,6 +42,68 @@ static Sound_Asset load_wav(string name) {
     
     return result;
 }
+
+//
+// Ogg/Vorbis
+//
+
+static inline s32 vorbis_ilog(u64 a) {
+    s32 result = 0;
+    if(CAST(s64, a) > 0) {
+        result += 1;
+        a>>= 1;
+    }
+    return result;
+}
+
+static inline f32 vorbis_unpack_f32(u32 a) {
+    s32 mantissa =  a & 0x01FFFFF;
+    u32 sign     =  a & 0x8000000;
+    u32 exponent = (a & 0x7FE0000) >> 21;
+    mantissa ^= sign;
+    u32 result = mantissa * (1 << (exponent - 788));
+    return *CAST(f32 *, &result);
+}
+
+// @Speed!!!
+static u32 vorbis_codebook_scalar_lookup(Vorbis_Codebook *codebook, bitreader *reader) {
+    u32 bits = 0;
+    u32 bit_count = 0;
+    FORI_NAMED(j, 0, 32) {
+        u32 bit = read_bits(reader, 1).u;
+        bits |= bit;
+        bit_count += 1;
+        
+        FORI_TYPED(u32, 0, codebook->entry_count) {
+            if((codebook->huffman[i] == bits) && (codebook->huffman_lengths[i] == bit_count)) {
+                return i;
+            }
+        }
+        
+        bits <<= 1;
+    }
+    
+    UNHANDLED;
+    return 0;
+}
+
+//
+// MIDI
+//
+
+static inline s32 midi_decodemod_and_advance(u8 **at) {
+    MIRROR_VARIABLE(u8 *, _at, at);
+    s32 result = *_at;
+    while(*_at++ & (1 << 7)) {
+        result = (result << 7) | *_at;
+    }
+    
+    return CAST(s32, result);
+}
+
+//
+// Internal assets
+//
 
 static inline string read_entire_asset(Memory_Block *block, Datapack_Handle *pack, s32 asset_uid) {
     Asset_Metadata metadata = get_asset_metadata(pack, asset_uid);

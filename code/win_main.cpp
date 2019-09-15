@@ -1,65 +1,68 @@
 
+#include <intrin.h>
+#include <windows.h>
+#include <dsound.h>
+
+#include <d3d12.h>
+#include <d3d12sdklayers.h>
+#include <dxgi1_2.h>
+#include <dxgi1_3.h>
+#include <dxgi1_4.h>
+#include <d3dcompiler.h>
+
+#include      "basic.h"
+#include       "keys.h"
+#include       "math.h"
+#include      "input.h"
+#include     "string.h"
+#include "os_context.h"
+#include "interfaces.h"
+
+#include    "print.cpp"
+#include   "string.cpp"
+#include    "input.cpp"
+
+#include    "d3d12.cpp"
+#include   "dsound.cpp"
+
 #define UNICODE
 #define _UNICODE
 
-#define WGL_CONTEXT_MAJOR_VERSION_ARB 0x2091
-#define WGL_CONTEXT_MINOR_VERSION_ARB 0x2092
-#define WGL_CONTEXT_LAYER_PLANE_ARB 0x2093
-#define WGL_CONTEXT_FLAGS_ARB 0x2094
-#define WGL_CONTEXT_PROFILE_MASK_ARB 0x9126
-#define WGL_CONTEXT_DEBUG_BIT_ARB 0x0001
-#define WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB 0x0002
-#define WGL_CONTEXT_CORE_PROFILE_BIT_ARB 0x00000001
-#define WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB 0x00000002
-#define WGL_DRAW_TO_WINDOW_ARB 0x2001
-#define WGL_ACCELERATION_ARB 0x2003
-#define WGL_FULL_ACCELERATION_ARB 0x2027
-#define WGL_SUPPORT_OPENGL_ARB 0x2010
-#define WGL_DOUBLE_BUFFER_ARB 0x2011
-#define WGL_PIXEL_TYPE_ARB 0x2013
-#define WGL_TYPE_RGBA_ARB 0x202B
-#define WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB 0x20A9
-
-
-#include <intrin.h>
-#include "basic.h"
-#include "win_windows.h"
+//
+// CRT bootstrapping
+//
 extern "C" {
-#include "win_nocrt.c"
+    int _fltused = 0x9875;
+    
+    void wWinMainCRTStartup() {
+        HINSTANCE instance = GetModuleHandleW(0);
+        ASSERT_TYPE_SIZES;
+        int result = wWinMain(instance, 0, 0, 0);
+        ExitProcess(result);
+    }
+    
     // shlwapi.h:
     s32 PathFileExistsW(const u16 *pszPath);
 }
-#include "win_dsound.h"
 
-#include "os_headers.h"
-#include "win_main.h"
-#include "os_context.h"
-#include "interfaces.h"
-#include "os_code.cpp"
-
-#define AUDIO_HZ 44100
-#define AUDIO_CHANNELS 2
-#define AUDIO_BYTES_PER_SAMPLE (sizeof(s16) * AUDIO_CHANNELS)
+static struct {
+    bool                window_was_resized_by_platform;
+    bool                input_should_reload;
+    bool                cursor_is_being_captured;
+    bool                cursor_was_captured_when_focus_was_lost;
+    bool                alt_is_down;
+    bool                currently_fullscreen;
+    
+    v2s                 window_dim;
+    
+    u64                 cpu_freq; // Not actually the cpu frequency; according to QueryPerformanceFrequency, it could be 1024 times less.
+    f64                 inv_cpu_freq;
+    u64                 base_time;
+    
+    HWND                window_handle;
+} win32;
 
 static Program_State program_state;
-static bool window_was_resized_by_platform;
-static bool input_should_reload;
-static bool cursor_is_being_captured;
-static bool cursor_was_captured_when_focus_was_lost;
-static bool alt_is_down;
-static bool currently_fullscreen;
-
-static s32 window_border_added_width;
-static s32 window_border_added_height;
-
-static u64 cpu_freq;
-static f64 inv_cpu_freq;
-static u64 base_time;
-static f64 cur_time;
-
-static void *global_window_handle;
-static IDirectSoundBuffer *global_secondary_buffer;
-static dsound_buffer global_secondary_buffer_info;
 
 struct thread_job {
     void (*function)(Implicit_Context *_this, void *);
@@ -74,106 +77,36 @@ static struct {
     thread_job *job_queue;
 } global_thread_info;
 
-typedef s32 WINAPI DirectSoundCreate_t(GUID *lpGuid, IDirectSound **ppDS, IUnknown *pUnkOuter);
-typedef s32 WINAPI wglChoosePixelFormatARB_t(void *hDC, const s32 *piAttribIList, const f32 *pfAttribFList, u32 nMaxFormats, s32 *piFormats, u32 *nNumFormats);
-typedef void * WINAPI wglCreateContextAttribsARB_t(void *hDC, void *hShareContext, const s32 *attribList);
-typedef s32 WINAPI wglSwapIntervalEXT_t(s32 interval);
-typedef void *WINAPI wglGetProcAddress_t(const char *lpszProc);
-typedef s32 WINAPI wglMakeCurrent_t(void *hdc, void *hglrc);
-typedef s32 WINAPI wglDeleteContext_t(void *hglrc);
-typedef void *WINAPI wglCreateContext_t(void *hdc);
-typedef const u8 *wglGetExtensionsStringEXT_t(void);
-// Extended:
-GLOBAL_FUNCTION_POINTER(wglChoosePixelFormatARB);
-GLOBAL_FUNCTION_POINTER(wglCreateContextAttribsARB);
-GLOBAL_FUNCTION_POINTER(wglSwapIntervalEXT);
-GLOBAL_FUNCTION_POINTER(wglGetExtensionsStringEXT);
-// Base:
-GLOBAL_FUNCTION_POINTER(wglGetProcAddress);
-GLOBAL_FUNCTION_POINTER(wglMakeCurrent);
-GLOBAL_FUNCTION_POINTER(wglDeleteContext);
-GLOBAL_FUNCTION_POINTER(wglCreateContext);
-static void *opengl_lib;
-
-// Raymond Chen's fullscreen toggle.
-WINDOWPLACEMENT wnd_placement = {sizeof(wnd_placement)};
-static void toggle_fullscreen(void * wnd_handle) {
-    u32 wnd_style    = GetWindowLongW(wnd_handle, GWL_STYLE);
-    if(wnd_style & WS_OVERLAPPEDWINDOW){ // switch to fullscreen
-        MONITORINFO mi = {sizeof(mi)};
-        if(GetWindowPlacement(wnd_handle, &wnd_placement) &&
-           GetMonitorInfoW(MonitorFromWindow(wnd_handle, MONITOR_DEFAULTTOPRIMARY), &mi)) {
-            SetWindowLongW(wnd_handle, GWL_STYLE  , wnd_style    &    ~WS_OVERLAPPEDWINDOW);
-            SetWindowPos(wnd_handle, HWND_TOP,
-                         mi.rcMonitor.left, mi.rcMonitor.top,
-                         mi.rcMonitor.right - mi.rcMonitor.left,
-                         mi.rcMonitor.bottom - mi.rcMonitor.top,
-                         SWP_NOOWNERZORDER|SWP_FRAMECHANGED);
-        }
-    } else {                              // switch to windowed
-        SetWindowLongW(wnd_handle, GWL_STYLE  , wnd_style    |    WS_OVERLAPPEDWINDOW);
-        SetWindowPlacement(wnd_handle, &wnd_placement);
-        SetWindowPos(wnd_handle, 0, 0, 0, 0, 0,
-                     SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|
-                     SWP_NOOWNERZORDER|SWP_FRAMECHANGED);
-    }
-}
-
 static OS_MEM_ALLOC(win_mem_alloc) {
     return VirtualAlloc(0, size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
 }
 
-inline void win_free(void *data) {
+static inline void win_free(void *data) {
     if(data) VirtualFree(data, 0, MEM_RELEASE);
 }
 
-inline u64 get_cpu_time() {
+static inline u64 get_cpu_time() {
     LARGE_INTEGER time;
     QueryPerformanceCounter(&time);
     return time.QuadPart;
 }
 
-inline u64 get_cpu_freq() {
+static inline u64 get_cpu_freq() {
     LARGE_INTEGER freq;
     QueryPerformanceFrequency(&freq);
     
     return(freq.QuadPart);
 }
 
-static OS_GET_SECS(win_get_seconds) {
-    u64 time = get_cpu_time();
-    time -= base_time;
-    // It turns out that using __rdtsc *AND* QueryPerformanceCounter is a bad
-    // idea because, while __rdtsc always returns the CPU's timestamp, QueryPerformanceCounter
-    // compensates for QueryPerformanceFrequency sometimes being 1024 times less than it should.
-    return ((f64)time) * inv_cpu_freq;
-}
-
-// @Incomplete: I don't know what's better.
-#if 0
-static void get_hardware_information(void * dc) {
-#if 1
-    s32 resolution_x = GetDeviceCaps(dc, HORZRES);
-    s32 resolution_y = GetDeviceCaps(dc, VERTRES);
-    s32 refresh_rate = GetDeviceCaps(dc, VREFRESH);
-#else
-    DEVMODE device;
-    device.dmSize = sizeof(DEVMODE);
-    EnumDisplaySettings(0, ENUM_CURRENT_SETTINGS, &device);
-#endif
-}
-#endif
-
-inline f64 set_seconds() {
-    cur_time = win_get_seconds();
-    return(cur_time);
-}
-
-inline void get_window_dim(void * handle, s32 dim[2]) {
+static inline v2s get_window_dim() {
+    v2s result = {};
     RECT rect;
-    GetClientRect(handle, &rect);
-    dim[0] = rect.right - rect.left;
-    dim[1] = rect.bottom - rect.top;
+    GetClientRect(win32.window_handle, &rect);
+    
+    result.x = rect.right - rect.left;
+    result.y = rect.bottom - rect.top;
+    
+    return result;
 }
 
 static usize win_file_size(void *file_handle) {
@@ -185,15 +118,12 @@ static usize win_file_size(void *file_handle) {
 }
 
 static void *win_open_file_utf16(u16 *file_name) {
-    void * file_handle = CreateFileW(file_name,
-                                     GENERIC_READ,
-                                     FILE_SHARE_READ,
-                                     0,
-                                     OPEN_EXISTING,
-                                     0,
-                                     0);
+    HANDLE file_handle = CreateFileW(CAST(LPCWSTR, file_name), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
     
-    return(file_handle);
+    if(CAST(uptr, file_handle) != HFILE_ERROR) {
+        return file_handle;
+    } 
+    return 0;
 }
 
 static void *win_open_file_utf8(string file_name) {
@@ -211,14 +141,14 @@ OS_CLOSE_FILE(win_close_file) {
 
 // From MSDN:
 // "If the function fails, or is completing asynchronously, the return value is zero (FALSE)."
-// ...so we can't really make use of the return value right now.
+// Should we even consider making this an asynchronous read on the platform's side instead of ours?
 static OS_READ_FILE(win_read_file) {
     ASSERT(length <= 0xFFFFFFFF);
     u32 bytes_read = 0;
     OVERLAPPED overlapped = {0};
     overlapped.Offset = offset & 0xFFFFFFFF;
     overlapped.OffsetHigh = (u32)(offset >> 32);
-    ReadFile(handle, out, (u32)length, &bytes_read, &overlapped);
+    ReadFile(handle, out, (u32)length, CAST(LPDWORD, &bytes_read), &overlapped);
     return (bytes_read == (u32)length);
 }
 
@@ -240,7 +170,7 @@ static OS_READ_ENTIRE_FILE(win_read_entire_file) {
         void *file_data = win_mem_alloc(file_size);
         
         u32 bytes_read;
-        if(ReadFile(file_handle, file_data, (u32)file_size, &bytes_read, 0) &&
+        if(ReadFile(file_handle, file_data, (u32)file_size, CAST(LPDWORD, &bytes_read), 0) &&
            (bytes_read == file_size)) {
             result.data = (u8 *)file_data;
             result.length = bytes_read;
@@ -261,7 +191,7 @@ static bool win_write_entire_file(string file_name, string file_data) {
     
     bool success = false;
     
-    void * file_handle = CreateFileW(utf16filename,
+    HANDLE file_handle = CreateFileW(CAST(LPCWSTR, utf16filename),
                                      GENERIC_READ|GENERIC_WRITE,
                                      FILE_SHARE_READ|FILE_SHARE_WRITE,
                                      0,
@@ -272,7 +202,7 @@ static bool win_write_entire_file(string file_name, string file_data) {
     if(file_handle != INVALID_HANDLE_VALUE) {
         
         u32 bytes_written;
-        if(WriteFile(file_handle, file_data.data, (u32)file_data.length, &bytes_written, 0) &&
+        if(WriteFile(file_handle, file_data.data, (u32)file_data.length, CAST(LPDWORD, &bytes_written), 0) &&
            (bytes_written == file_data.length)) {
             success = true;
         }
@@ -283,60 +213,42 @@ static bool win_write_entire_file(string file_name, string file_data) {
     return(success);
 }
 
-static void center_cursor(void * wnd_handle){
-    
+static void center_cursor(HWND wnd_handle){
     RECT rect;
     GetWindowRect(wnd_handle, &rect);
-    int centerx = (rect.right + rect.left) / 2;
-    int centery = (rect.bottom + rect.top) / 2;
+    s32 centerx = (rect.right + rect.left) / 2;
+    s32 centery = (rect.bottom + rect.top) / 2;
     
     SetCursorPos(centerx, centery);
-}
-
-static void get_cursor_position_in_pixels(s32 *out_x, s32 *out_y) {
-    POINT cursor_p;
-    
-    GetCursorPos(&cursor_p);
-    ScreenToClient(global_window_handle, &cursor_p);
-    
-    *out_x = cursor_p.x - program_state.draw_rect[0];
-    *out_y = (program_state.draw_rect[3] - program_state.draw_rect[1]) - (cursor_p.y - program_state.draw_rect[1]);
 }
 
 static void win_capture_cursor() {
     while(ShowCursor(FALSE) >= 0)
         ;
-    cursor_is_being_captured = true;
+    win32.cursor_is_being_captured = true;
 }
 
 static void win_release_cursor() {
     while(ShowCursor(TRUE) < 0)
         ;
-    cursor_is_being_captured = false;
+    win32.cursor_is_being_captured = false;
 }
 
-static sptr WINAPI wnd_proc(void * handle,
-                            u32 msg,
-                            uptr w_param,
-                            sptr l_param) {
-    
+static sptr WINAPI wnd_proc(HWND handle, u32 msg, uptr w_param, sptr l_param) {
     switch(msg) {
-        
         case WM_SIZE: {
             switch(w_param) {
-                
                 case SIZE_MAXIMIZED:
                 case SIZE_RESTORED: {
-                    window_was_resized_by_platform = true;
+                    win32.window_was_resized_by_platform = true;
                     program_state.should_render = true;
-                    input_should_reload = true;
+                    win32.input_should_reload = true;
                 } break;
                 
                 case SIZE_MINIMIZED: {
                     program_state.should_render = false;
                 } break;
             }
-            
             return 0;
         }
         
@@ -355,7 +267,7 @@ static sptr WINAPI wnd_proc(void * handle,
         
         case WM_SETFOCUS: {
             program_state.should_render = true;
-            if(cursor_was_captured_when_focus_was_lost) {
+            if(win32.cursor_was_captured_when_focus_was_lost) {
                 win_capture_cursor();
             }
             return 0;
@@ -363,14 +275,14 @@ static sptr WINAPI wnd_proc(void * handle,
         
         case WM_KILLFOCUS: {
             program_state.should_render = false;
-            input_should_reload = true;
-            cursor_was_captured_when_focus_was_lost = cursor_is_being_captured;
+            win32.input_should_reload = true;
+            win32.cursor_was_captured_when_focus_was_lost = win32.cursor_is_being_captured;
             win_release_cursor();
             return 0;
         }
         
         case WM_MOVE: {
-            input_should_reload = true;
+            win32.input_should_reload = true;
             return 0;
         }
         
@@ -384,217 +296,6 @@ static sptr WINAPI wnd_proc(void * handle,
             return(DefWindowProcW(handle, msg, w_param, l_param));
         }
     }
-}
-
-static void dsound_init(void * wnd_handle){
-    void * dsound_lib = LoadLibraryW((u16 *)L"dsound.dll");
-    if(dsound_lib){
-        DirectSoundCreate_t *DirectSoundCreate_ = (DirectSoundCreate_t *)GetProcAddress(dsound_lib, "DirectSoundCreate");
-        IDirectSound *dsound;
-        
-        if(DirectSoundCreate_ && (DirectSoundCreate_(0, &dsound, 0) == DS_OK)){
-            
-            WAVEFORMATEX wav_format = {0};
-            wav_format.wFormatTag = WAVE_FORMAT_PCM;
-            wav_format.nChannels = 2;
-            wav_format.wBitsPerSample = 16;
-            wav_format.nSamplesPerSec = AUDIO_HZ;
-            wav_format.nBlockAlign = wav_format.nChannels*wav_format.wBitsPerSample/8;
-            wav_format.nAvgBytesPerSec = wav_format.nSamplesPerSec * wav_format.nBlockAlign;
-            
-            // Primary buffer:
-            if(dsound->SetCooperativeLevel(wnd_handle, DSSCL_PRIORITY) == DS_OK){
-                DSBUFFERDESC primary_buffer_desc = {0};
-                primary_buffer_desc.dwSize = sizeof(DSBUFFERDESC);
-                primary_buffer_desc.dwFlags = DSBCAPS_PRIMARYBUFFER;
-                IDirectSoundBuffer *primary_buffer;
-                if(dsound->CreateSoundBuffer(&primary_buffer_desc, &primary_buffer, 0) == DS_OK){
-                    if(primary_buffer->SetFormat(&wav_format) == DS_OK){
-                    }
-                }
-            }
-            
-            // Secondary buffer:
-            DSBUFFERDESC secondary_buffer_desc = {0};
-            secondary_buffer_desc.dwSize = sizeof(DSBUFFERDESC);
-            secondary_buffer_desc.dwFlags = DSBCAPS_GETCURRENTPOSITION2;
-            secondary_buffer_desc.dwBufferBytes = AUDIO_HZ * sizeof(s16) * 2; // one second of audio buffering.
-            secondary_buffer_desc.lpwfxFormat = &wav_format;
-            if(dsound->CreateSoundBuffer(&secondary_buffer_desc, &global_secondary_buffer, 0) == DS_OK){
-            }
-        }
-    }
-}
-
-static int old_pf_index(void * dc) {
-    
-    PIXELFORMATDESCRIPTOR desired_pf = {0};
-    desired_pf.nSize        = sizeof(PIXELFORMATDESCRIPTOR);
-    desired_pf.nVersion     = 1;
-    desired_pf.dwFlags      = PFD_DRAW_TO_WINDOW|PFD_SUPPORT_OPENGL|PFD_DOUBLEBUFFER;
-    desired_pf.iPixelType   = PFD_TYPE_RGBA;
-    desired_pf.cColorBits   = 32;
-    desired_pf.cAlphaBits   = 8;
-    desired_pf.cAccumBits   = 0;
-    desired_pf.cDepthBits   = 0;
-    desired_pf.cStencilBits = 0;
-    desired_pf.cAuxBuffers  = 0;
-    desired_pf.iLayerType   = PFD_MAIN_PLANE;
-    
-    int pf_index = ChoosePixelFormat(dc, &desired_pf);
-    return(pf_index);
-}
-
-static void *old_glrc(void * dc) {
-    
-    int pf_index = old_pf_index(dc);
-    PIXELFORMATDESCRIPTOR given_pf;
-    DescribePixelFormat(dc,
-                        pf_index,
-                        sizeof(PIXELFORMATDESCRIPTOR),
-                        &given_pf);
-    SetPixelFormat(dc, pf_index, &given_pf);
-    
-    void * glrc = wglCreateContext(dc);
-    return(glrc);
-}
-
-static void opengl_preinit(void *instance) {
-    // Get the basic wgl functions first:
-    opengl_lib = LoadLibraryW((u16 *)L"opengl32.dll");
-    if(opengl_lib) {
-        wglGetProcAddress = (wglGetProcAddress_t *)GetProcAddress(opengl_lib, "wglGetProcAddress");
-        wglMakeCurrent = (wglMakeCurrent_t *)GetProcAddress(opengl_lib, "wglMakeCurrent");
-        wglDeleteContext = (wglDeleteContext_t *)GetProcAddress(opengl_lib, "wglDeleteContext");
-        wglCreateContext = (wglCreateContext_t *)GetProcAddress(opengl_lib, "wglCreateContext");
-    }
-    
-    // We're creating a dummy window to request GL extensions and get a 3.0 context.
-    WNDCLASS wnd_class = {0};
-    wnd_class.style = CS_OWNDC;
-    wnd_class.lpfnWndProc = DefWindowProcW;
-    wnd_class.hInstance = instance;
-    wnd_class.hbrBackground = 0;
-    wnd_class.lpszClassName = (u16 *)L"dummy wndclass";
-    
-    if(RegisterClassW(&wnd_class)) {
-        
-        void *wnd_handle = CreateWindowExW(0,
-                                           wnd_class.lpszClassName,
-                                           (u16 *)L"a genesis thing",
-                                           WS_OVERLAPPEDWINDOW,
-                                           CW_USEDEFAULT, CW_USEDEFAULT,
-                                           CW_USEDEFAULT, CW_USEDEFAULT,
-                                           0, 0,
-                                           instance,
-                                           0);
-        
-        if(wnd_handle) {
-            void * dc = GetDC(wnd_handle);
-            
-            { // Setting the dummy pixel format, creating the dummy context.
-                
-                void * glrc = old_glrc(dc);
-                wglMakeCurrent(dc, glrc);
-                
-                wglGetExtensionsStringEXT = (wglGetExtensionsStringEXT_t *)wglGetProcAddress("wglGetExtensionsStringEXT");
-                const u8 *extensions_string = wglGetExtensionsStringEXT();
-                bool pixel_format_available = false;
-                bool swap_control_available = false;
-                bool framebuffer_srgb_available = false;
-                string wgl_arb_pixel_format_string = STRING("WGL_ARB_pixel_format");
-                string wgl_ext_swap_control_string = STRING("WGL_EXT_swap_control");
-                string wgl_ext_framebuffer_srgb_string = STRING("WGL_EXT_framebuffer_sRGB");
-                while(*extensions_string) {
-                    if(str_is_at_start_of(wgl_arb_pixel_format_string, (char *)extensions_string)) {
-                        pixel_format_available = true;
-                    } else if(str_is_at_start_of(wgl_ext_swap_control_string, (char *)extensions_string)) {
-                        swap_control_available = true;
-                    } else if(str_is_at_start_of(wgl_ext_framebuffer_srgb_string, (char *)extensions_string)) {
-                        framebuffer_srgb_available = true;
-                    }
-                    
-                    while(extensions_string[1] && (*extensions_string != ' ')) {
-                        ++extensions_string;
-                    }
-                    ++extensions_string;
-                }
-                
-                if(pixel_format_available) {
-                    wglChoosePixelFormatARB = (wglChoosePixelFormatARB_t *)wglGetProcAddress("wglChoosePixelFormatARB");
-                    wglCreateContextAttribsARB = (wglCreateContextAttribsARB_t *)wglGetProcAddress("wglCreateContextAttribsARB");
-                }
-                if(swap_control_available) {
-                    wglSwapIntervalEXT = (wglSwapIntervalEXT_t *)wglGetProcAddress("wglSwapIntervalEXT");
-                }
-                /* Relevant extensions:
-                - WGL_ARB_pixel_format: GetPixelFormatAttrib, ChoosePixelFormat.
-                - WGL_EXT_swap_control: wglSwapIntervalEXT, wglGetSwapIntervalEXT.
-                - WGL_EXT_framebuffer_sRGB: GL_FRAMEBUFFER_SRGB, FRAMEBUFFER_SRGB_CAPABLE.
-                */
-                
-                wglMakeCurrent(0, 0);
-                wglDeleteContext(glrc);
-            }
-            ReleaseDC(wnd_handle, dc);
-            DestroyWindow(wnd_handle);
-        }
-    }
-}
-
-static void opengl_init(void * dc) {
-    
-    void * glrc = 0;
-    s32 pf_index = 0;
-    u32 pf_count = 0;
-    if(wglChoosePixelFormatARB) {
-        
-        s32 i_attribs[] = {
-            WGL_DRAW_TO_WINDOW_ARB, TRUE,
-            WGL_ACCELERATION_ARB, WGL_FULL_ACCELERATION_ARB,
-            WGL_SUPPORT_OPENGL_ARB, TRUE,
-            WGL_DOUBLE_BUFFER_ARB, TRUE,
-            WGL_PIXEL_TYPE_ARB, WGL_TYPE_RGBA_ARB,
-            WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB, TRUE,
-            0,
-        };
-        wglChoosePixelFormatARB(dc, i_attribs, 0, 1, &pf_index, &pf_count);
-    }
-    else {
-        pf_index = old_pf_index(dc);
-    }
-    PIXELFORMATDESCRIPTOR given_pf;
-    DescribePixelFormat(dc,
-                        pf_index,
-                        sizeof(PIXELFORMATDESCRIPTOR),
-                        &given_pf);
-    SetPixelFormat(dc, pf_index, &given_pf);
-    
-    if(wglCreateContextAttribsARB) {
-        
-        s32 context_attribs[] = {
-            WGL_CONTEXT_MAJOR_VERSION_ARB, 3,
-            WGL_CONTEXT_MINOR_VERSION_ARB, 0,
-            WGL_CONTEXT_FLAGS_ARB, WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB
-#if GENESIS_DEV
-                |WGL_CONTEXT_DEBUG_BIT_ARB
-#endif
-                ,
-            WGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_CORE_PROFILE_BIT_ARB, //WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB,
-            0, // This terminates the list
-        };
-        glrc = wglCreateContextAttribsARB(dc, 0, context_attribs);
-    }
-    
-    if(!glrc) {
-        
-        glrc = old_glrc(dc);
-    }
-    wglMakeCurrent(dc, glrc);
-    
-    wglSwapIntervalEXT(1);
-    
-    window_was_resized_by_platform = true;
 }
 
 static int win_game_key_from_scancode(sptr l_param) {
@@ -631,7 +332,7 @@ static int win_game_key_from_scancode(sptr l_param) {
     return(game_key);
 }
 
-static void win_sample_input(void * wnd_handle) {
+static void win_sample_input(HWND wnd_handle) {
     MSG msg;
     s32 dm[2] = {};
     
@@ -647,13 +348,13 @@ static void win_sample_input(void * wnd_handle) {
         switch(msg.message) {
             case WM_INPUT: {
                 u32 size = 0;
-                GetRawInputData((void *)msg.lParam,
+                GetRawInputData(CAST(HRAWINPUT, msg.lParam),
                                 RID_INPUT,
                                 0,
                                 &size,
                                 sizeof(RAWINPUTHEADER));
                 RAWINPUT rawin;
-                GetRawInputData((void *)msg.lParam,
+                GetRawInputData(CAST(HRAWINPUT, msg.lParam),
                                 RID_INPUT,
                                 &rawin,
                                 &size,
@@ -718,10 +419,10 @@ static void win_sample_input(void * wnd_handle) {
                 u16 scancode = (msg.lParam >> 16) & 0xFF;
                 // We haven't checked for extension yet, so WINSC_RALT is also handled here.
                 if(scancode == WINSC_LALT) {
-                    alt_is_down = true;
+                    win32.alt_is_down = true;
                 }
                 // Same here: WINSC_NUMERICENTER is handled by not extending.
-                if((scancode == WINSC_ENTER) && alt_is_down) {
+                if((scancode == WINSC_ENTER) && win32.alt_is_down) {
                     program_state.should_be_fullscreen = !program_state.should_be_fullscreen;
                 } else {
                     game_key = win_game_key_from_scancode(msg.lParam);
@@ -736,7 +437,7 @@ static void win_sample_input(void * wnd_handle) {
             case WM_SYSKEYUP: {
                 u16 scancode = (msg.lParam >> 16) & 0xFF;
                 if(scancode == WINSC_LALT) {
-                    alt_is_down = false;
+                    win32.alt_is_down = false;
                 }
                 
                 u32 game_key = win_game_key_from_scancode(msg.lParam);
@@ -752,7 +453,18 @@ static void win_sample_input(void * wnd_handle) {
     
     move_mouse(program_state.input_settings.mouse_sensitivity, &program_state.input, dm);
     
-    get_cursor_position_in_pixels(&program_state.cursor_position_in_pixels[0], &program_state.cursor_position_in_pixels[1]);
+    {
+        POINT cursor_p;
+        
+        GetCursorPos(&cursor_p);
+        ScreenToClient(win32.window_handle, &cursor_p);
+        
+        s32 draw_rect_width = program_state.draw_rect.right - program_state.draw_rect.left;
+        s32 draw_rect_height = program_state.draw_rect.top - program_state.draw_rect.bottom;
+        
+        program_state.cursor_position_barycentric.x = CAST(f32, cursor_p.x - program_state.draw_rect.left) / CAST(f32, draw_rect_width);
+        program_state.cursor_position_barycentric.y = CAST(f32, draw_rect_height - (cursor_p.y - program_state.draw_rect.bottom)) / CAST(f32, draw_rect_height);
+    }
 }
 
 static bool file_exists(u16 *name) {
@@ -762,7 +474,7 @@ static bool file_exists(u16 *name) {
 
 static void win_unload_game_code(Game_Interface *gi) {
     if(gi->os_handle) {
-        FreeLibrary((void *)gi->os_handle);
+        FreeLibrary(CAST(HMODULE, gi->os_handle));
         gi->run_frame = 0;
     }
 }
@@ -784,84 +496,12 @@ static void concatenate_utf16(u16 *a, u32 a_count,
     }
 }
 
-static OS_BEGIN_SOUND_UPDATE(win_begin_sound_update) {
-    
-    u32 play_cur;
-    u32 write_cur;
-    if(global_secondary_buffer->GetCurrentPosition(&play_cur, &write_cur) == DS_OK) {
-        
-        u32 buffer_bytes = global_secondary_buffer_info.buffer_bytes;
-        
-        global_secondary_buffer_info.samples_played = global_secondary_buffer_info.samples_played % global_secondary_buffer_info.buffer_samples;
-        ASSERT(global_secondary_buffer_info.samples_played < global_secondary_buffer_info.buffer_samples);
-        
-        // @Hack.
-        static bool startup_hack = false;
-        if(!startup_hack) {
-            global_secondary_buffer_info.samples_played = play_cur/AUDIO_BYTES_PER_SAMPLE;
-            startup_hack = true;
-        }
-        
-        u32 lock_byte = global_secondary_buffer_info.samples_played * AUDIO_BYTES_PER_SAMPLE;
-        
-        u32 target_cur = (u32)(write_cur + (AUDIO_HZ*AUDIO_BYTES_PER_SAMPLE*0.1))%buffer_bytes;
-        // Tested DSound minimum latency (from play to write cursor) was ~30ms.
-        u32 write_bytes = 0;
-        if(lock_byte > target_cur) {
-            
-            write_bytes = target_cur + buffer_bytes - lock_byte;
-        }
-        else if(lock_byte < target_cur) {
-            
-            write_bytes = target_cur - lock_byte;
-        }
-        
-        s32 dserr = global_secondary_buffer->Lock(lock_byte, write_bytes,
-                                                  (void **)(&global_secondary_buffer_info.fill_sec_1), &global_secondary_buffer_info.fill_bytes_1,
-                                                  (void **)(&global_secondary_buffer_info.fill_sec_2), &global_secondary_buffer_info.fill_bytes_2, 0);
-        if(dserr == DS_OK) {
-            ASSERT(write_bytes);
-            ASSERT((global_secondary_buffer_info.fill_bytes_1 % 4) == 0);
-            ASSERT((global_secondary_buffer_info.fill_bytes_2 % 4) == 0);
-            
-            u32 samples_to_update = (global_secondary_buffer_info.fill_bytes_1 + global_secondary_buffer_info.fill_bytes_2) / AUDIO_BYTES_PER_SAMPLE;
-            return(samples_to_update);
-        } else {
-            ASSERT(!write_bytes);
-        }
-    } else {
-        // @Incomplete: We get here when the audio device is disconnected.
-        // What can we do about that?
-        UNHANDLED;
-    }
-    
-    return(0);
-}
-
-static OS_END_SOUND_UPDATE(win_end_sound_update) {
-    u32 fill_1 = global_secondary_buffer_info.fill_bytes_1;
-    u32 fill_2 = global_secondary_buffer_info.fill_bytes_2;
-    s16 *out_1 = global_secondary_buffer_info.fill_sec_1;
-    s16 *out_2 = global_secondary_buffer_info.fill_sec_2;
-    s16 *in_1 = input_buffer;
-    s16 *in_2 = input_buffer + (fill_1 / sizeof(s16));
-    
-    if(samples_to_update) {
-        mem_copy(in_1, out_1, fill_1);
-        mem_copy(in_2, out_2, fill_2);
-        global_secondary_buffer_info.samples_played += samples_to_update;
-    }
-    
-    s32 dserr = global_secondary_buffer->Unlock(out_1, fill_1, out_2, fill_2);
-    ASSERT(dserr == DS_OK);
-}
-
 static OS_PRINT(win_print) {
     text.data[text.length] = 0;
     OutputDebugStringA((char *)text.data);
 }
 
-static u32 WINAPI thread_entry(void *_context) {
+DWORD WINAPI thread_entry(void *_context) {
     Implicit_Context *context = (Implicit_Context *)_context;
     
     for(;;) {
@@ -895,23 +535,18 @@ static OS_ADD_THREAD_JOB(win_add_thread_job) {
     }
 }
 
-static Game_Interface win_load_game_code(u16 *built_dll_name,
-                                         u16 *loaded_dll_name) {
-    
+static Game_Interface win_load_game_code(u16 *built_dll_name, u16 *loaded_dll_name) {
     Game_Interface result = {0};
     
     // We can load the newly-built DLL normally.
-    DeleteFileW(loaded_dll_name);
-    MoveFileW(built_dll_name, loaded_dll_name);
-    void *os_handle = (void *)LoadLibraryW(loaded_dll_name);
+    DeleteFileW(CAST(LPCWSTR, loaded_dll_name));
+    MoveFileW(CAST(LPCWSTR, built_dll_name), CAST(LPCWSTR, loaded_dll_name));
+    HMODULE os_handle = LoadLibraryW(CAST(LPCWSTR, loaded_dll_name));
     if(os_handle) {
-        
-        game_get_api get_api_proc = (game_get_api)GetProcAddress((void *)os_handle, 
-                                                                 "g_get_api");
+        game_get_api get_api_proc = (game_get_api)GetProcAddress(os_handle,  "g_get_api");
         if(get_api_proc) {
             
             OS_Export win_export;
-            win_export.os.get_seconds = win_get_seconds;
             win_export.os.mem_alloc = win_mem_alloc;
             win_export.os.open_file = win_open_file_utf8;
             win_export.os.close_file = win_close_file;
@@ -926,6 +561,16 @@ static Game_Interface win_load_game_code(u16 *built_dll_name,
             win_export.os.print = win_print;
             win_export.os.add_thread_job = win_add_thread_job;
             
+            win_export.os.begin_frame_and_clear = begin_frame_and_clear;
+            win_export.os.end_frame = end_frame;
+            win_export.os.make_command_lists = make_command_lists;
+            win_export.os.make_vertex_buffers = make_vertex_buffers;
+            win_export.os.set_transform = set_transform;
+            win_export.os.submit_commands = submit_commands;
+            win_export.os.draw_mesh_instances = draw_mesh_instances;
+            win_export.os.make_editable_mesh = make_editable_mesh;
+            win_export.os.update_editable_mesh = update_editable_mesh;
+            
             //
             // @Temporary @Debug
             //
@@ -933,16 +578,6 @@ static Game_Interface win_load_game_code(u16 *built_dll_name,
 #if GENESIS_BUILD_ASSETS_ON_STARTUP
             win_export.os.debug_asset_directory = STRING("W:\\genesis\\assets\\");
 #endif
-            
-            if(opengl_lib) {
-                u32 i;
-                for(i = 0; i < ARRAY_LENGTH(opengl_base_functions); ++i) {
-                    win_export.opengl.base_functions[i] = GetProcAddress(opengl_lib, opengl_base_functions[i]);
-                }
-                for(i = 0; i < ARRAY_LENGTH(opengl_extended_functions); ++i) {
-                    win_export.opengl.extended_functions[i] = wglGetProcAddress(opengl_extended_functions[i]);
-                }
-            }
             
             result = get_api_proc(&win_export);
             result.os_handle = os_handle;
@@ -952,10 +587,9 @@ static Game_Interface win_load_game_code(u16 *built_dll_name,
 }
 
 static Implicit_Context *make_implicit_context(Memory_Block *block, u32 thread_index) {
-    Implicit_Context *context = push_struct(block, Implicit_Context, 64);
+    Implicit_Context *context = push_struct(block, Implicit_Context, CACHE_LINE_SIZE);
     context->thread_index = thread_index;
-    // @Hardcoded: Cache line size.
-    sub_block(&context->temporary_memory, block, KiB(64), 64);
+    sub_block(&context->temporary_memory, block, KiB(256), CACHE_LINE_SIZE);
     return context;
 }
 
@@ -969,12 +603,13 @@ static Memory_Block allocate_memory_block(usize size) {
     return block;
 }
 
-s32 WINAPI WinMain(void *hInstance, void *hPrevInstance, char *lpCmdLine, int nShowCmd) {
+s32 WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nShowCmd) {
     timeBeginPeriod(1);
     
+    // @Cleanup: Just set the working directory.
     u16 exe_directory[MAX_PATH] = {};
     u16 exe_full_path[MAX_PATH] = {};
-    u32 exe_full_path_length = GetModuleFileNameW(0, exe_full_path, ARRAY_LENGTH(exe_full_path));
+    u32 exe_full_path_length = GetModuleFileNameW(0, CAST(LPWSTR, exe_full_path), ARRAY_LENGTH(exe_full_path));
     u32 current_directory_name_length = 0;
     for(u32 i = exe_full_path_length - 1; i >= 0; --i) {
         if(exe_full_path[i] == '\\') {
@@ -995,35 +630,35 @@ s32 WINAPI WinMain(void *hInstance, void *hPrevInstance, char *lpCmdLine, int nS
                       loaded_dll_full_path, MAX_PATH);
     
     {
-        s32 success = SetCurrentDirectoryW(exe_directory);
+        s32 success = SetCurrentDirectoryW(CAST(LPWSTR, exe_directory));
         ASSERT(success);
     }
     
-    cpu_freq = get_cpu_freq();
-    inv_cpu_freq = 1.0 / (f64)cpu_freq;
-    base_time = get_cpu_time();
+    win32.cpu_freq = get_cpu_freq();
+    win32.inv_cpu_freq = 1.0 / (f64)win32.cpu_freq;
+    win32.base_time = get_cpu_time();
     
-    // @Incomplete: We should use WNDCLASSEX when we can provide a small icon.
-    WNDCLASS wnd_class = {0};
+    WNDCLASSEXW wnd_class = {};
+    wnd_class.cbSize = sizeof(WNDCLASSEXW);
     wnd_class.style = CS_HREDRAW|CS_VREDRAW|CS_OWNDC;
     wnd_class.lpfnWndProc = wnd_proc;
     wnd_class.hInstance = hInstance;
-    wnd_class.hCursor = LoadCursorW(0, IDC_CROSS);
-    wnd_class.hbrBackground = GetStockObject(BLACK_BRUSH);
-    wnd_class.lpszClassName = (u16 *)L"genesis wndclass";
+    wnd_class.hCursor = LoadCursorA(0, IDC_CROSS);
+    wnd_class.hbrBackground = CAST(HBRUSH, GetStockObject(BLACK_BRUSH));
+    wnd_class.lpszClassName = L"genesis wndclass";
     
-    if(RegisterClassW(&wnd_class)) {
-        void *wnd_handle = CreateWindowExW(0, //WS_EX_OVERLAPPEDWINDOW,
-                                           wnd_class.lpszClassName,
-                                           (u16 *)L"a genesis thing",
-                                           WS_OVERLAPPEDWINDOW,
-                                           CW_USEDEFAULT, CW_USEDEFAULT,
-                                           CW_USEDEFAULT, CW_USEDEFAULT,
-                                           0, 0,
-                                           hInstance,
-                                           0);
+    if(RegisterClassExW(&wnd_class)) {
+        HWND wnd_handle = CreateWindowExW(0, //WS_EX_OVERLAPPEDWINDOW,
+                                          wnd_class.lpszClassName,
+                                          L"a genesis thing",
+                                          WS_OVERLAPPEDWINDOW,
+                                          CW_USEDEFAULT, CW_USEDEFAULT,
+                                          CW_USEDEFAULT, CW_USEDEFAULT,
+                                          0, 0,
+                                          hInstance,
+                                          0);
         
-        global_window_handle = wnd_handle;
+        win32.window_handle = wnd_handle;
         if(wnd_handle) {
             //
             // Sound:
@@ -1035,33 +670,10 @@ s32 WINAPI WinMain(void *hInstance, void *hPrevInstance, char *lpCmdLine, int nS
             }
             
             dsound_init(wnd_handle);
-            global_secondary_buffer->Play(0, 0, DSBPLAY_LOOPING);
             
-            dsound_buffer audio = {0};
-            global_secondary_buffer_info.buffer_samples = AUDIO_HZ;
-            global_secondary_buffer_info.buffer_bytes = global_secondary_buffer_info.buffer_samples * AUDIO_BYTES_PER_SAMPLE;
+            d3d_init(wnd_handle);
             
-            if(global_secondary_buffer->Lock(0, global_secondary_buffer_info.buffer_bytes,
-                                             (void **)(&global_secondary_buffer_info.fill_sec_1), &global_secondary_buffer_info.fill_bytes_1,
-                                             (void **)(&global_secondary_buffer_info.fill_sec_2), &global_secondary_buffer_info.fill_bytes_2, 0) == DS_OK) {
-                global_secondary_buffer_info.start_of_buffer = global_secondary_buffer_info.fill_sec_1;
-                global_secondary_buffer->Unlock(global_secondary_buffer_info.fill_sec_1, global_secondary_buffer_info.fill_bytes_1,
-                                                global_secondary_buffer_info.fill_sec_2, global_secondary_buffer_info.fill_bytes_2);
-            } else {
-                UNHANDLED; // Device was disconnected?
-            }
-            
-            void * dc = GetDC(wnd_handle);
-            
-            //
-            // OpenGL:
-            //
-            
-            {
-                opengl_preinit(hInstance);
-                opengl_init(dc);
-            }
-            
+            /////////////////////////////////////////////////
             //
             // Raw input:
             //
@@ -1094,7 +706,6 @@ s32 WINAPI WinMain(void *hInstance, void *hPrevInstance, char *lpCmdLine, int nS
             
             { // Get the number of cores on this machine:
                 SYSTEM_INFO system_info = {};
-                // @Incomplete: This might not work with WOW64 processes?
                 GetSystemInfo(&system_info);
                 program_state.core_count = system_info.dwNumberOfProcessors;
             }
@@ -1135,82 +746,96 @@ s32 WINAPI WinMain(void *hInstance, void *hPrevInstance, char *lpCmdLine, int nS
             // Game code loading:
             //
             
-            Game_Interface g_interface;
+            Game_Interface g_interface = {};
+#if 1
             if(!file_exists(built_dll_full_path)) {
                 if(file_exists(loaded_dll_full_path)) {
-                    MoveFileW(loaded_dll_full_path, built_dll_full_path);
+                    MoveFileW(CAST(LPCWSTR, loaded_dll_full_path), CAST(LPCWSTR, built_dll_full_path));
                 } else UNHANDLED;
             }
             g_interface = win_load_game_code(built_dll_full_path, loaded_dll_full_path);
             g_interface.init_mem(main_thread_context, &game_block, &program_state);
+#endif
             
             //
             // Finishing up init:
             //
             
-            {
-                RECT client_rect;
-                RECT window_rect;
-                
-                GetClientRect(wnd_handle, &client_rect);
-                GetWindowRect(wnd_handle, &window_rect);
-                
-                window_border_added_width  = window_rect. right - window_rect.left - client_rect. right;
-                window_border_added_height = window_rect.bottom - window_rect. top - client_rect.bottom;
-            }
-            
-            get_window_dim(wnd_handle, program_state.window_size);
+            program_state.window_size = get_window_dim();
             ShowWindow(wnd_handle, SW_SHOW);
             
             // First frame timing:
             LARGE_INTEGER frame_start_time;
             QueryPerformanceCounter(&frame_start_time);
             for(;;) {
-                set_seconds();
+                
+                { // @@ We might want to move this closer to run_frame.
+                    // It turns out that using __rdtsc *AND* QueryPerformanceCounter is a bad
+                    // idea because, while __rdtsc always returns the CPU's timestamp, QueryPerformanceCounter
+                    // compensates for QueryPerformanceFrequency sometimes being 1024 times less than it should,
+                    // so we always use QueryPerformanceFrequency and QueryPerformanceCounter. Ultimately this
+                    // also works better on CPUs that are likely to periodically over/underclock:
+                    
+                    // "The performance counter frequency that QueryPerformanceFrequency returns is determined
+                    //  during system initialization and doesn't change while the system is running."
+                    // See https://docs.microsoft.com/en-us/windows/win32/sysinfo/acquiring-high-resolution-time-stamps
+                    // for more info.
+                    u64 time = get_cpu_time();
+                    time -= win32.base_time;
+                    program_state.time = CAST(f64, time) * win32.inv_cpu_freq;
+                }
+                
+                // Updating the window size:
+                if(program_state.should_render || 1) { // If we're minimized, don't bother.
+                    if(win32.currently_fullscreen != program_state.should_be_fullscreen) {
+                        d3d_set_fullscreen(program_state.should_be_fullscreen);
+                        
+                        win32.window_was_resized_by_platform = true;
+                        
+                        win32.currently_fullscreen = program_state.should_be_fullscreen;
+                    }
+                    
+                    if(!win32.window_was_resized_by_platform) {
+                        if(mem_compare(&win32.window_dim, &program_state.window_size, sizeof(v2s))) {
+                            // The game changed the window size.
+                            program_state.should_be_fullscreen = false;
+                            
+                            RECT rect;
+                            
+                            rect.left = 0;
+                            rect.top = 0;
+                            rect.right = program_state.window_size.x;
+                            rect.bottom = program_state.window_size.y;
+                            
+                            AdjustWindowRect(&rect, wnd_class.style, 0);
+                            
+                            SetWindowPos(wnd_handle, 0,
+                                         0, 0, rect.right - rect.left, rect.bottom - rect.top,
+                                         SWP_DRAWFRAME|SWP_NOMOVE|SWP_NOOWNERZORDER|SWP_NOZORDER|SWP_SHOWWINDOW);
+                            
+                            win32.window_dim = program_state.window_size;
+                        }
+                    } else {
+                        // Our window has already been resized by the OS, so just update the program state.
+                        v2s new_window_dim = get_window_dim();
+                        
+                        program_state.window_size = new_window_dim;
+                        win32.window_dim = new_window_dim;
+                        win32.window_was_resized_by_platform = false;
+                        
+                        d3d_resize_backbuffers(program_state.window_size);
+                    }
+                }
+#if 1
                 if(file_exists(built_dll_full_path)) {
                     win_unload_game_code(&g_interface);
                     g_interface = win_load_game_code(built_dll_full_path, loaded_dll_full_path);
                 }
+#endif
                 
-                // Updating the window size:
-                if(program_state.should_render) { // If we're minimized, don't bother.
-                    bool window_was_resized_at_all = window_was_resized_by_platform;
-                    
-                    if(currently_fullscreen != program_state.should_be_fullscreen) {
-                        toggle_fullscreen(wnd_handle);
-                        window_was_resized_by_platform = true;
-                        window_was_resized_at_all = true;
-                        
-                        currently_fullscreen = program_state.should_be_fullscreen;
-                    }
-                    
-                    if(!window_was_resized_by_platform) {
-                        s32 window_dim[2];
-                        get_window_dim(wnd_handle, window_dim);
-                        if(mem_compare(window_dim, program_state.window_size, sizeof(s32[2]))) {
-                            // The game changed the window size.
-                            program_state.should_be_fullscreen = false;
-                            
-                            s32 desired_width  = program_state.window_size[0] + window_border_added_width;
-                            s32 desired_height = program_state.window_size[1] + window_border_added_height;
-                            
-                            SetWindowPos(wnd_handle, 0,
-                                         0, 0, desired_width, desired_height,
-                                         SWP_DRAWFRAME|SWP_NOMOVE|SWP_NOOWNERZORDER|SWP_NOZORDER|SWP_SHOWWINDOW);
-                            window_was_resized_at_all = true;
-                        }
-                    }
-                    
-                    if(window_was_resized_at_all) {
-                        // Our window has already been resized, so just update the program state.
-                        get_window_dim(wnd_handle, program_state.window_size);
-                        window_was_resized_by_platform = false;
-                    }
-                }
-                
-                if(input_should_reload) {
+                if(win32.input_should_reload) {
                     clear_input_state(&program_state.input);
-                    input_should_reload = false;
+                    win32.input_should_reload = false;
                 }
                 
                 win_sample_input(wnd_handle);
@@ -1219,30 +844,37 @@ s32 WINAPI WinMain(void *hInstance, void *hPrevInstance, char *lpCmdLine, int nS
                     g_interface.run_frame(main_thread_context, &game_block, &program_state);
                 }
                 
-                if(cursor_is_being_captured) {
+                // d3d_draw_debug_frame();
+                
+                if(win32.cursor_is_being_captured) {
                     center_cursor(wnd_handle);
                 }
-                
-                SwapBuffers(dc);
                 
                 {
                     // Frame timing
                     LARGE_INTEGER frame_end_time;
                     QueryPerformanceCounter(&frame_end_time);
                     f64 frame_ms = (((f64)(frame_end_time.QuadPart - frame_start_time.QuadPart) * 1000.0) *
-                                    inv_cpu_freq);
+                                    win32.inv_cpu_freq);
                     
                     QueryPerformanceCounter(&frame_end_time);
                     frame_ms = (((f64)(frame_end_time.QuadPart - frame_start_time.QuadPart) * 1000.0) *
-                                inv_cpu_freq);
+                                win32.inv_cpu_freq);
+                    
+#if 1
                     char log[256];
                     print(log, 256, "[OS] Frame time: %fms\n", frame_ms);
                     OutputDebugStringA(log);
+#endif
                     
                     frame_start_time = frame_end_time;
                 }
                 
                 if(program_state.should_close) {
+                    if(win32.currently_fullscreen) {
+                        d3d_set_fullscreen(false);
+                    }
+                    
                     ExitProcess(0);
                 }
             }
@@ -1250,5 +882,5 @@ s32 WINAPI WinMain(void *hInstance, void *hPrevInstance, char *lpCmdLine, int nS
     }
     
     // If we get here, that means we couldn't initialise properly.
-    ExitProcess(0);
+    ExitProcess(1);
 }

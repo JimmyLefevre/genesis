@@ -447,3 +447,15 @@ inline usize print(u8 *out, usize out_length, const char *format, ...) {
     BEGIN_VARARG(varargs, format);
     return _print((char *)out, out_length, format, varargs);
 }
+static string print(Memory_Block *block, const char *format, ...) {
+    char *varargs;
+    BEGIN_VARARG(varargs, format);
+    
+    string result;
+    result.data = block->mem + block->used;
+    result.length = _print((char *)result.data, block->size - block->used, format, varargs);
+    block->used += result.length;
+    ASSERT(block->used <= block->size);
+    
+    return result;
+}

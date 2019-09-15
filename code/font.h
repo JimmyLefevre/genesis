@@ -373,6 +373,8 @@ struct Font_Height_Data {
 #define MAX_RASTERS_PER_UPDATE 64
 
 static u8 hash_glyph(Hashed_Glyph_Data *);
+// @XX
+static u8 hash_glyph(Hashed_Glyph_Data *a) {return 0;}
 #define KEY_TYPE u8
 #define STRUCT_TYPE Glyph_Hash
 #define ITEM_TYPE Hashed_Glyph_Data

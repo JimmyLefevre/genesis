@@ -1,17 +1,4 @@
 
-inline u16 big_to_little_endian_u16(u16 *ptr) {
-    u16 result = (((u8 *)ptr)[0] << 8) + ((u8 *)ptr)[1];
-    return result;
-}
-inline s16 big_to_little_endian_s16(s16 *ptr) {
-    s16 result = (s16)big_to_little_endian_u16((u16 *)ptr);
-    return result;
-}
-inline u32 big_to_little_endian_u32(u32 *ptr) {
-    u32 result = (((u8 *)ptr)[0] << 24) + (((u8 *)ptr)[1] << 16) + (((u8 *)ptr)[2] << 8) + (((u8 *)ptr)[3]);
-    return result;
-}
-
 static void accumulate_line(f32 *accumulation, s32 acc_width, s32 acc_height, v2 p0, v2 p1) {
     if(p1.y == p0.y) {
         // Contours are infinitely thin, so there's no area to compute.
@@ -102,11 +89,11 @@ static void init_font(Text_Info *info, Datapack_Handle *datapack, u32 font_index
     
     bool found_a_cmap_we_can_read = false;
     
-    u16 table_count = big_to_little_endian_u16(&subtable->table_count);
+    u16 table_count = read_u16_be(&subtable->table_count);
     Font_Parse_Data font = {};
     for(u32 itable = 0; itable < table_count; ++itable) {
         TTF_Table_Directory *it = first_dir + itable;
-        u8 *table_location = file_data + big_to_little_endian_u32(&it->offset_from_start_of_file);
+        u8 *table_location = file_data + read_u32_be(&it->offset_from_start_of_file);
         switch(it->tag) {
             case FOUR_BYTES_TO_U32('g', 'l', 'y', 'f'): {
                 font.glyf = table_location;
@@ -115,22 +102,22 @@ static void init_font(Text_Info *info, Datapack_Handle *datapack, u32 font_index
             case FOUR_BYTES_TO_U32('h', 'e', 'a', 'd'): {
                 TTF_head_Header *head = (TTF_head_Header *)table_location;
                 
-                font.loca_format = big_to_little_endian_s16(&head->loca_format);
+                font.loca_format = read_s16_be(&head->loca_format);
             } break;
             
             case FOUR_BYTES_TO_U32('h', 'h', 'e', 'a'): {
                 TTF_hhea_Header *hhea = (TTF_hhea_Header *)table_location;
                 
-                font.ascent = big_to_little_endian_s16(&hhea->ascent);
-                font.descent = big_to_little_endian_s16(&hhea->descent);
-                font.line_gap = big_to_little_endian_s16(&hhea->line_gap);
-                font.horizontal_metric_count = big_to_little_endian_u16(&hhea->horizontal_metric_count);
+                font.ascent = read_s16_be(&hhea->ascent);
+                font.descent = read_s16_be(&hhea->descent);
+                font.line_gap = read_s16_be(&hhea->line_gap);
+                font.horizontal_metric_count = read_u16_be(&hhea->horizontal_metric_count);
                 inv_height = 1.0f / (f32)(font.ascent - font.descent);
             } break;
             
             case FOUR_BYTES_TO_U32('k', 'e', 'r', 'n'): {
                 TTF_kern_Header *header = (TTF_kern_Header *)table_location;
-                ASSERT((header->version == 0) && (big_to_little_endian_u16(&header->subtable_count) == 1));
+                ASSERT((header->version == 0) && (read_u16_be(&header->subtable_count) == 1));
                 
                 TTF_kern_Subtable_Header *subheader = (TTF_kern_Subtable_Header *)(header + 1);
                 font.kern = (TTF_kern_Subtable *)(subheader + 1);
@@ -141,7 +128,7 @@ static void init_font(Text_Info *info, Datapack_Handle *datapack, u32 font_index
             } break;
             
             case FOUR_BYTES_TO_U32('l', 'o', 'c', 'a'): {
-                font.loca = file_data + big_to_little_endian_u32(&it->offset_from_start_of_file);
+                font.loca = file_data + read_u32_be(&it->offset_from_start_of_file);
             } break;
             
             // @Incomplete:
@@ -151,16 +138,16 @@ static void init_font(Text_Info *info, Datapack_Handle *datapack, u32 font_index
                 TTF_cmap_Header *cmap = (TTF_cmap_Header *)table_location;
                 TTF_cmap_Encoding_Table *first_encoding_table = (TTF_cmap_Encoding_Table *)(cmap + 1);
                 
-                for(u32 iencoding = 0; iencoding < big_to_little_endian_u16(&cmap->table_count); ++iencoding) {
+                for(u32 iencoding = 0; iencoding < read_u16_be(&cmap->table_count); ++iencoding) {
                     TTF_cmap_Encoding_Table *table = first_encoding_table + iencoding;
-                    u16 platform = big_to_little_endian_u16(&table->platform);
+                    u16 platform = read_u16_be(&table->platform);
                     
                     if(platform == TTF_CMAP_PLATFORM_WINDOWS) {
-                        u16 encoding = big_to_little_endian_u16(&table->encoding);
+                        u16 encoding = read_u16_be(&table->encoding);
                         
                         if((encoding == TTF_CMAP_ENCODING_WINDOWS_BMP) || (encoding == TTF_CMAP_ENCODING_WINDOWS_UTF32)) {
-                            TTF_cmap_Format_12_13_Subtable_Header *cmap_subtable = (TTF_cmap_Format_12_13_Subtable_Header *)(((u8 *)cmap) + big_to_little_endian_u32(&table->byte_offset_to_subtable));
-                            u16 format = big_to_little_endian_u16(&cmap_subtable->format);
+                            TTF_cmap_Format_12_13_Subtable_Header *cmap_subtable = (TTF_cmap_Format_12_13_Subtable_Header *)(((u8 *)cmap) + read_u32_be(&table->byte_offset_to_subtable));
+                            u16 format = read_u16_be(&cmap_subtable->format);
                             
                             if(format == 4) {
                                 font.cmap = (TTF_cmap_Format_4_Subtable_Header *)cmap_subtable;
@@ -194,7 +181,7 @@ static void init_font(Text_Info *info, Datapack_Handle *datapack, u32 font_index
 }
 
 static u16 get_glyph_index(TTF_cmap_Format_4_Subtable_Header *subtable4, s32 codepoint) {
-    u16 segment_count = big_to_little_endian_u16(&subtable4->segment_count_times_two) / 2;
+    u16 segment_count = read_u16_be(&subtable4->segment_count_times_two) / 2;
     
     u16 * const end_codepoints = (u16 *)(subtable4 + 1);
     u16 * const start_codepoints = end_codepoints + segment_count + 1;
@@ -202,16 +189,16 @@ static u16 get_glyph_index(TTF_cmap_Format_4_Subtable_Header *subtable4, s32 cod
     u16 * const index_offsets = (u16 *)(index_deltas + segment_count);
     // @Speed: Binary search instead of linear lookup if the codepoint is big.
     for(u32 j = 0; j < segment_count; ++j) {
-        const u16 end_codepoint = big_to_little_endian_u16(end_codepoints + j);
+        const u16 end_codepoint = read_u16_be(end_codepoints + j);
         if(end_codepoint >= codepoint) {
-            const u16 start_codepoint = big_to_little_endian_u16(start_codepoints + j);
-            const s16 index_delta = big_to_little_endian_s16(index_deltas + j);
-            const u16 index_offset = big_to_little_endian_u16(index_offsets + j);
+            const u16 start_codepoint = read_u16_be(start_codepoints + j);
+            const s16 index_delta = read_s16_be(index_deltas + j);
+            const u16 index_offset = read_u16_be(index_offsets + j);
             
             if(!index_offset) {
                 return (u16)(codepoint + index_delta);
             } else {
-                return big_to_little_endian_u16(index_offsets + j + (codepoint - start_codepoint) + (index_offset / 2));
+                return read_u16_be(index_offsets + j + (codepoint - start_codepoint) + (index_offset / 2));
             }
         }
     }
@@ -221,12 +208,12 @@ static u16 get_glyph_index(TTF_cmap_Format_4_Subtable_Header *subtable4, s32 cod
 inline Horizontal_Metric get_horizontal_metrics(Horizontal_Metric *horizontal_metrics, u16 horizontal_metric_count, u16 glyph_index) {
     Horizontal_Metric result;
     if(glyph_index > horizontal_metric_count) {
-        result.advance = big_to_little_endian_s16((s16 *)(horizontal_metrics + horizontal_metric_count - 1));
-        result.left_side_bearing = big_to_little_endian_s16((s16 *)horizontal_metrics + horizontal_metric_count + glyph_index);
+        result.advance = read_s16_be((s16 *)(horizontal_metrics + horizontal_metric_count - 1));
+        result.left_side_bearing = read_s16_be((s16 *)horizontal_metrics + horizontal_metric_count + glyph_index);
     } else {
         Horizontal_Metric metric = horizontal_metrics[glyph_index];
-        result.advance = big_to_little_endian_u16(&metric.advance);
-        result.left_side_bearing = big_to_little_endian_s16(&metric.left_side_bearing);
+        result.advance = read_u16_be(&metric.advance);
+        result.left_side_bearing = read_s16_be(&metric.left_side_bearing);
     }
     return result;
 }
@@ -234,10 +221,10 @@ inline Horizontal_Metric get_horizontal_metrics(Horizontal_Metric *horizontal_me
 inline s16 get_kerning(TTF_kern_Subtable *kern, u16 left_glyph, u16 right_glyph) {
     const u16 count = kern->pair_count;
     Kerning_Pair *kerning_pairs = (Kerning_Pair *)(kern + 1);
-    for(u32 i = 0; i < big_to_little_endian_u16(&kern->pair_count); ++i) {
+    for(u32 i = 0; i < read_u16_be(&kern->pair_count); ++i) {
         Kerning_Pair it = kerning_pairs[i];
-        if((big_to_little_endian_u16(&it.left_glyph) == left_glyph) && (big_to_little_endian_u16(&it.right_glyph) == right_glyph)) {
-            return big_to_little_endian_s16(&it.kerning);
+        if((read_u16_be(&it.left_glyph) == left_glyph) && (read_u16_be(&it.right_glyph) == right_glyph)) {
+            return read_s16_be(&it.kerning);
         }
     }
     return 0;
@@ -286,7 +273,7 @@ static void rasterize_glyph(Glyph_Raster_Data *data, f32 scale,
             }
             ++running_x;
         } else if(!(current_flags & TTF_SIMPLE_GLYPH_X_IS_SAME_OR_POSITIVE_X_SHORT_VECTOR)) {
-            current_x += big_to_little_endian_s16((s16 *)(x_coords + running_x));
+            current_x += read_s16_be((s16 *)(x_coords + running_x));
             running_x += 2;
         }
         if(current_flags & TTF_SIMPLE_GLYPH_Y_SHORT_VECTOR) {
@@ -297,7 +284,7 @@ static void rasterize_glyph(Glyph_Raster_Data *data, f32 scale,
             }
             ++running_y;
         } else if(!(current_flags & TTF_SIMPLE_GLYPH_Y_IS_SAME_OR_POSITIVE_Y_SHORT_VECTOR)) {
-            current_y += big_to_little_endian_s16((s16 *)(y_coords + running_y));
+            current_y += read_s16_be((s16 *)(y_coords + running_y));
             running_y += 2;
         }
         
@@ -316,7 +303,7 @@ static void rasterize_glyph(Glyph_Raster_Data *data, f32 scale,
                     accumulate_quadratic_bezier(acc, width, height, last_p, off_curve_p, first_contour_p);
                 }
             }
-            start_of_next_contour_i = big_to_little_endian_u16(last_contour_points + running_contour_index++) + 1;
+            start_of_next_contour_i = read_u16_be(last_contour_points + running_contour_index++) + 1;
             last_p = p;
             first_contour_p = p;
             last_off_curve = false;
@@ -377,14 +364,14 @@ static void find_glyph_raster_data(u8 *loca, s16 loca_format, u8 *glyf, u16 glyp
     bool no_outline = false;
     if(loca_format == 0) {
         u16 *table16 = (u16 *)loca;
-        glyph_offset = big_to_little_endian_u16(table16 + glyph_index) * 2;
+        glyph_offset = read_u16_be(table16 + glyph_index) * 2;
         if(table16[glyph_index] == table16[glyph_index + 1]) {
             no_outline = true;
         }
     } else {
         ASSERT(loca_format == 1);
         u32 *table32 = (u32 *)loca;
-        glyph_offset = big_to_little_endian_u32(table32 + glyph_index);
+        glyph_offset = read_u32_be(table32 + glyph_index);
         if(table32[glyph_index] == table32[glyph_index + 1]) {
             no_outline = true;
         }
@@ -392,14 +379,14 @@ static void find_glyph_raster_data(u8 *loca, s16 loca_format, u8 *glyf, u16 glyp
     
     // Actually finding the glyph in the table:
     TTF_Glyph_Header *glyph = (TTF_Glyph_Header *)(glyf + glyph_offset);
-    s16 contour_count = big_to_little_endian_s16(&glyph->contour_count);
+    s16 contour_count = read_s16_be(&glyph->contour_count);
     if(contour_count >= 0) {
         // The glyph is simple.
         u16 *last_contour_points = (u16 *)(glyph + 1);
-        u16 instruction_count = big_to_little_endian_u16(last_contour_points + contour_count);
+        u16 instruction_count = read_u16_be(last_contour_points + contour_count);
         u8 *instructions = (u8 *)(last_contour_points + contour_count + 1);
         u8 *flags = instructions + instruction_count;
-        u16 contour_point_count = (no_outline) ? (0) : (1 + big_to_little_endian_u16(last_contour_points + contour_count - 1));
+        u16 contour_point_count = (no_outline) ? (0) : (1 + read_u16_be(last_contour_points + contour_count - 1));
         
         // We need to parse the flags first to locate the x/y arrays.
         u16 x_size_in_bytes = 0;
@@ -424,10 +411,10 @@ static void find_glyph_raster_data(u8 *loca, s16 loca_format, u8 *glyf, u16 glyp
         u8 *x_coords = _flags;
         u8 *y_coords = x_coords + x_size_in_bytes;
         
-        s16 x_min = big_to_little_endian_s16(&glyph->x_min);
-        s16 y_min = big_to_little_endian_s16(&glyph->y_min);
-        s16 x_max = big_to_little_endian_s16(&glyph->x_max);
-        s16 y_max = big_to_little_endian_s16(&glyph->y_max);
+        s16 x_min = read_s16_be(&glyph->x_min);
+        s16 y_min = read_s16_be(&glyph->y_min);
+        s16 x_max = read_s16_be(&glyph->x_max);
+        s16 y_max = read_s16_be(&glyph->y_max);
         
         Glyph_Raster_Data data;
         data.flags = flags;
@@ -632,8 +619,11 @@ void Implicit_Context::text_update(Text_Info *info, Rendering_Info *render_info)
             Horizontal_Metric * const horz = info->fonts.horizontal_metrics[font];
             const u16 horz_count = info->fonts.horizontal_metric_counts[font];
             const f32 height = info->strings.heights[istr];
-            // @Temporary Fix this when we change scales on the calling side.
+            
+            // Right now, the height is blown up to pixel scale in text_add_string.
+            // We just wait until this step to transform it to an integer.
             const s16 pixel_height = (s16)height;
+            
             s16 iglyph = running_string_offset;
             const s16 ilastglyph = iglyph + length;
             s16 glyph_index = info->glyphs.indices[iglyph];

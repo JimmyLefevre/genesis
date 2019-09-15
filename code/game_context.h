@@ -17,20 +17,25 @@ struct Implicit_Context {
     GAME_INIT_MEMORY(g_init_mem);
     GAME_RUN_FRAME(g_run_frame);
     s16 *update_audio(Audio_Info *, const s32, const f32);
-    void g_modify_textures(Game *, Rendering_Info *);
+    void load_chunk(Loaded_Sound *, s16 *, s32, s32);
     inline void reset_temporary_memory();
-    void draw_game(Rendering_Info *, Game *, Asset_Storage *);
+    void draw_game_single_threaded(Renderer *, Game *, Asset_Storage *);
     string tprint(char *, ...);
     void clone_game_state(Game *, Game *);
     void mix_samples(const s16 *, const s32, f32, const f32, f32 *, s32, f32 *, f32 *, f32 **, const u8);
     void flush_rasters_to_atlas(Text_Info *, u8 *, u32 **, v2s16 *, v2 *, s16, s16 *, s16 *, s16 *, v2s16, f32, f32);
     void files_convert_wav_to_facs(string *, s32, Memory_Block *, string *);
+    void files_convert_wav_to_uvga(string *, s32, Memory_Block *, string *);
     string files_convert_bmp_to_ta(string *, v2 *, v2 *, u32, Memory_Block *);
-    void draw_menu(Menu *, Game_Client *, Rendering_Info *, Text_Info *);
     void init_glyph_cache(Text_Info *);
-    void draw_string_immediate(Text_Info *, Rendering_Info *, string, v2, f32, s8, bool, v4);
-    void text_update(Text_Info *, Rendering_Info *);
+    void draw_string_immediate(Text_Info *, Renderer *, string, v2, f32, s8, bool, v4);
+    void text_update(Text_Info *, Renderer *);
+    void render_init(Renderer*, Memory_Block*, u8);
+    s16* update_synth(Synth*, const s32);
+    void mesh_update(Mesh_Editor *, Renderer *, Input *);
+    void export_mesh(Mesh_Editor *);
     
+    void draw_game_threaded(void *);
     void test_thread_job(void *);
     void entire_sound_update(void *);
     void load_unbatched_first_audio_chunk_job(void *);
@@ -38,7 +43,7 @@ struct Implicit_Context {
     void load_unbatched_next_audio_chunk_job(void *);
     
 #if GENESIS_DEV
-    void profile_update(Profiler *, Program_State *, Text_Info *, Rendering_Info *, Input *);
+    void profile_update(Profiler *, Program_State *, Text_Info *, Renderer *, Input *);
 #endif
 };
 
