@@ -8,12 +8,10 @@ The objective is to make use of SIMD (like in audio.cpp, mix_samples), multithre
 The project uses SVN internally; this repository is a mirror for the source code. The code can be compiled as is (I am using MSVC 2017), but running the game requires asset files that are not provided here.
 
 For a short rundown of some notable features, we have:
-- A multithreaded job queue, albeit with no jobs being used for the game yet.
-- A SIMD sound mixer and a lock-free asynchronous sound streaming system.
+- A multithreaded job queue, albeit with minimal thread usage.
 - An interactive profiler that supports multithreaded logging and frame lookback.
-- Custom asset formats fitted to our needs: texture atlases and uninterleaved chunk-based audio.
+- Custom asset formats fitted to our needs.
+- A mesh-based (as opposed to sprite-based) D3D12 renderer which is similar to a traditional 3D renderer, only more specialised for our 2D use case.
+- A real-time subtractive synthesizer for audio.
 
-Some areas to work on:
-- Graphics are very barebones: very basic OpenGL 3 quad renderer, no graphical effects to speak of.
-- Asset management, outside of the audio mixer, is not asynchronous.
-- No compression/decompression whatsoever on assets.
+The latest systems, ie. the renderer and synth, are still barebones. The game used to have a sprite renderer and a SIMD-accelerated audio mixer with asynchronous resource streaming, which were both replaced for artistic reasons.
