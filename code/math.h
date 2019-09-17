@@ -845,6 +845,11 @@ static inline f32 f_round(f32 f) {
     return result;
 }
 
+static inline f32 f_round_to_f(f32 f, f32 round) {
+    f32 result = f + round * 0.5f - f_mod(f, round);
+    return result;
+}
+
 // Bezier/spline explanation: https://www.youtube.com/watch?v=S2fz4BS2J3Y
 // a  b c
 //  \/\/   Recursive interpolation of these three points, with

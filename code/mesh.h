@@ -4,6 +4,8 @@
 #define MAX_VERTS_PER_LAYER 64
 #define MAX_INDICES_PER_LAYER (((MAX_VERTS_PER_LAYER) - 2) * 3)
 
+#define DRAG_SNAP_GRANULARITY 0.1f
+
 struct Render_Vertex;
 
 struct Output_Mesh {
@@ -40,7 +42,9 @@ struct Edit_Mesh {
 #define MESHES_IN_PICKER 8
 ENUM(MESH_EDITOR_UI_SELECTION) {
     NONE,
+    
     VERTEX,
+    
     COLOR_PICKER,
     LAYER_PICKER,
     MESH_PICKER,
@@ -50,12 +54,19 @@ ENUM(MESH_EDITOR_UI_SELECTION) {
 
 struct Mesh_Editor {
     s32 selection;
+    
     s32 selected_vert;
-    v2 last_cursor_p; // ;Immediate
+    v2 vert_drag_start;
+    v2 cursor_drag_start;
+    
     bool highlight_all_vertices;
+    bool snap_to_grid;
+    bool snap_to_edge;
+    bool expanded_mesh_picker;
     
     s32 mesh_count;
     Edit_Mesh meshes[MAX_EDIT_MESH_COUNT];
     
+    u16 last_mesh; // @Cleanup :NeedToGenerateMultipleOutputMeshes We won't need this in the future.
     u16 current_mesh;
 };

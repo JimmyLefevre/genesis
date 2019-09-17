@@ -2,6 +2,12 @@
 static void mesh_init(Mesh_Editor *editor) {
 }
 
+static void edit_mesh_init(Mesh_Editor *editor, Edit_Mesh *mesh) {
+    *mesh = {};
+    mesh->layer_count = 1;
+    mesh->output = editor->meshes[0].output; // @Hack!
+}
+
 static u16 add_mesh(Mesh_Editor *editor, Output_Mesh *output, s32 vert_capacity, v4 first_layer_color) {
     s32 add = editor->mesh_count++;
     ASSERT(add < MAX_EDIT_MESH_COUNT);
@@ -23,60 +29,95 @@ static u16 add_mesh(Mesh_Editor *editor, Output_Mesh *output, s32 vert_capacity,
     return CAST(u16, add);
 }
 
-struct Vert_Span {
-    v2 *verts;
-    u16 *indices;
-    s32 count;
-};
-
-struct Edge_Intersection {
-    f32 edge_t;
-    s32 vert_index;
-};
+// We have two current_layer values because mesh->current_layer can get updated mid-frame, which we don't want to deal
+// with for robustness purposes.
+static v2 snap_vertex(Edit_Mesh *mesh, v2 vertex, s32 current_layer_index, bool snap_to_grid, bool snap_to_edge) {
+    v2 result = vertex;
+    
+    if(snap_to_edge) {
+        v2 best_closest = V2();
+        f32 best_distance_sq = LARGE_FLOAT;
+        
+        FORI_NAMED(other_layer_index, 0, mesh->layer_count) {
+            if(other_layer_index != current_layer_index) {
+                auto other_layer = &mesh->layers[other_layer_index];
+                
+                if(other_layer->vert_count > 1) {
+                    v2 other_a = other_layer->verts[other_layer->vert_count - 1];
+                    FORI_NAMED(other_b_index, 0, other_layer->vert_count) {
+                        v2 other_b = other_layer->verts[other_b_index];
+                        
+                        v2 direction = other_b - other_a;
+                        f32 length = v2_length(direction);
+                        direction /= length;
+                        f32 dot = v2_inner(result - other_a, direction);
+                        dot = f_clamp(dot, 0.0f, length);
+                        
+                        if(snap_to_grid) {
+                            // Snap along the edge.
+                            dot = f_round_to_f(dot, DRAG_SNAP_GRANULARITY);
+                        }
+                        
+                        v2 closest = other_a + direction * dot;
+                        f32 dist_sq = v2_length_sq(closest - result);
+                        if(best_distance_sq > dist_sq) {
+                            best_distance_sq = dist_sq;
+                            best_closest = closest;
+                        }
+                        
+                        other_a = other_b;
+                    }
+                }
+            }
+        }
+        
+        if(best_distance_sq < (0.15f * 0.15f)) {
+            result = best_closest;
+            
+            return result;
+        }
+    }
+    
+    if(snap_to_grid) {
+        // If we didn't snap to an edge, snap to the grid.
+        result.x = f_round_to_f(result.x, DRAG_SNAP_GRANULARITY);
+        result.y = f_round_to_f(result.y, DRAG_SNAP_GRANULARITY);
+    }
+    
+    return result;
+}
 
 static v2 unit_scale_to_world_space_offset(v2, f32);
 void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Input *in) {
     using namespace MESH_EDITOR_UI_SELECTION;
     SCOPE_MEMORY(&temporary_memory);
     
-    Edit_Mesh *mesh;
-    {
-        MIRROR_VARIABLE(u16, current_mesh, &editor->current_mesh);
-        if(BUTTON_PRESSED(in, slot1)) {
-            current_mesh = 0;
-        } else if(BUTTON_PRESSED(in, slot2)) {
-            current_mesh = 1;
-        } else if(BUTTON_PRESSED(in, slot2)) {
-            current_mesh = 2;
-        } else if(BUTTON_PRESSED(in, slot2)) {
-            current_mesh = 3;
-        }
-        
-        if(current_mesh >= editor->mesh_count) {
-            current_mesh = CAST(u16, editor->mesh_count);
-        }
-        
-        mesh = &editor->meshes[editor->current_mesh];
-    }
+    Edit_Mesh *mesh = &editor->meshes[editor->current_mesh];
     
     // @Incomplete: Need to be able to change default scale and rotation.
     
+    // @Cleanup: Debugger doesn't like this.
+    MIRROR_VARIABLE(s32, selected_vert, &editor->selected_vert);
+    MIRROR_VARIABLE(s32, selection, &editor->selection);
     v2 cursor_p = unit_scale_to_world_space_offset(in->xhairp, 1.0f);
     
     if(!BUTTON_DOWN(in, attack)) {
-        editor->selection = MESH_EDITOR_UI_SELECTION::NONE;
+        selection = MESH_EDITOR_UI_SELECTION::NONE;
     }
     
     if(BUTTON_PRESSED(in, up)) {
         editor->highlight_all_vertices = !editor->highlight_all_vertices;
     }
+    if(BUTTON_PRESSED(in, left)) {
+        editor->snap_to_grid = !editor->snap_to_grid;
+    }
+    if(BUTTON_PRESSED(in, down)) {
+        editor->snap_to_edge = !editor->snap_to_edge;
+    }
     
     s32 current_layer_index = mesh->current_layer;
     auto * const current_layer = &mesh->layers[current_layer_index];
     s32 vert_count_at_start_of_update = current_layer->vert_count;
-    
-    MIRROR_VARIABLE(s32, selection, &editor->selection);
-    MIRROR_VARIABLE(s32, selected_vert, &editor->selected_vert);
     
     if(!BUTTON_HELD(in, attack)) {
         selection = NONE;
@@ -93,6 +134,8 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                 if(BUTTON_PRESSED(in, attack)) {
                     selection = VERTEX;
                     selected_vert = i;
+                    editor->vert_drag_start = vert;
+                    editor->cursor_drag_start = cursor_p;
                 } else {
                     hovered_vert = i;
                 }
@@ -104,6 +147,18 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
     
     bool triangulate_polygon = false;
     
+    // @Hack :NeedToGenerateMultipleOutputMeshes
+    if(editor->last_mesh != editor->current_mesh) {
+        triangulate_polygon = true;
+        editor->last_mesh = editor->current_mesh;
+    }
+    
+    //
+    // Layout
+    //
+    
+#define MESH_PICKER_UNEXPANDED_BOTTOM 3.5f
+#define MESH_PICKER_EXPANDED_BOTTOM 4.5f - ((4.5f - MESH_PICKER_UNEXPANDED_BOTTOM) * MESHES_IN_PICKER)
     enum Layout {
         color_picker,
         layer_picker,
@@ -112,10 +167,15 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
         count,
     };
     rect2 layout[Layout::count];
-    
     layout[color_picker] = rect2_4f(-6.8f, -4.0f, -5.8f, -3.0f);
     layout[layer_picker] = rect2_4f(-8.0f, -4.0f, -7.0f, 4.0f);
-    layout[mesh_picker] = rect2_4f(-5.5f, 3.5f, 5.5f, 4.5f);
+    {
+        rect2 mesh_picker_aabb = rect2_4f(-5.5f, MESH_PICKER_UNEXPANDED_BOTTOM, 5.5f, 4.5f);
+        if(editor->expanded_mesh_picker) {
+            mesh_picker_aabb.bottom = MESH_PICKER_EXPANDED_BOTTOM;
+        }
+        layout[mesh_picker] = mesh_picker_aabb;
+    }
     
     { // Batched-hittest immediate UI update.
         s32 hit = v2_rect2_first_hit(cursor_p, layout, Layout::count);
@@ -155,14 +215,17 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             // @Speed?
             // This is just testing whether the polygon would be degenerate after moving the vert.
             // I'm not sure we cover all the cases, but we've had no issues thus far.
+            // @Robustness: This doesn't work when we cross an interior vert. When that is done, the
+            // editor can spinlock entirely.
+            
+            v2 target = editor->vert_drag_start + (cursor_p - editor->cursor_drag_start);
+            target = snap_vertex(mesh, target, current_layer_index, editor->snap_to_grid, editor->snap_to_edge);
             
             bool cancel = false;
             
             s32 a_index = (current_layer->vert_count + selected_vert - 1) % current_layer->vert_count;
-            s32 b_index = selected_vert       % current_layer->vert_count;
             s32 c_index = (selected_vert + 1) % current_layer->vert_count;
             v2 a = current_layer->verts[a_index];
-            v2 b = current_layer->verts[b_index] + cursor_p - editor->last_cursor_p;
             v2 c = current_layer->verts[c_index];
             
             ssize t0_index = current_layer->vert_count - 1;
@@ -171,13 +234,13 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                 v2 t1 = current_layer->verts[t1_index];
                 
                 if((t1_index == a_index) && (t0_index != c_index)) {
-                    cancel = line_line_overlap(t0, t1, b, c);
+                    cancel = line_line_overlap(t0, t1, target, c);
                 } else if((t0_index == c_index) && (t1_index != a_index)) {
-                    cancel = line_line_overlap(t0, t1, a, b);
+                    cancel = line_line_overlap(t0, t1, a, target);
                 } else if((t0_index == c_index) && (t1_index == a_index)) {
-                    cancel = (v2_cross_prod(t1 - t0, b - t0) <= 0.0f);
-                } else if((t0_index != a_index) && (t0_index != b_index)) {
-                    cancel = line_line_overlap(t0, t1, a, b) || line_line_overlap(t0, t1, b, c);
+                    cancel = (v2_cross_prod(t1 - t0, target - t0) <= 0.0f);
+                } else if((t0_index != a_index) && (t0_index != selected_vert)) {
+                    cancel = line_line_overlap(t0, t1, a, target) || line_line_overlap(t0, t1, target, c);
                 }
                 
                 if(cancel) {
@@ -188,7 +251,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             }
             
             if(!cancel) {
-                current_layer->verts[selected_vert] += cursor_p - editor->last_cursor_p;
+                current_layer->verts[selected_vert] = target;
                 triangulate_polygon = true;
             }
         } break;
@@ -218,19 +281,53 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                 f32 item_height = picker_height / MAX_LAYERS_PER_MESH;
                 
                 s32 picked_index = CAST(s32, relative_cursor_height / item_height);
-                mesh->current_layer = s_min(mesh->layer_count - 1, picked_index);
+                
+                if(picked_index >= mesh->layer_count) {
+                    mesh->layer_count = picked_index + 1;
+                } else {
+                    mesh->current_layer = s_min(mesh->layer_count - 1, picked_index);
+                }
             }
         } break;
         
         case MESH_PICKER: {
+            s32 picker_height = 1;
+            if(editor->expanded_mesh_picker) {
+                picker_height = MESHES_IN_PICKER;
+            }
+            
+            v2 picker_min = layout[mesh_picker].min;
+            v2 picker_dim = layout[mesh_picker].max - picker_min;
+            v2 relative_cursor_p = cursor_p - picker_min;
+            v2 item_dim = V2(picker_dim.x / MESHES_IN_PICKER, picker_dim.y / CAST(f32, picker_height));
+            
+            s32 picked_x = CAST(s32, relative_cursor_p.x / item_dim.x);
+            s32 picked_y = picker_height - 1 - CAST(s32, relative_cursor_p.y / item_dim.y);
+            s32 picked_index = picked_y * picker_height + picked_x;
+            if(picked_y > 0) {
+                // We ignore the expand button to find the mesh index.
+                picked_index -= 1;
+            }
+            
             if(BUTTON_PRESSED(in, attack)) {
-                f32 picker_left = layout[mesh_picker].left;
-                f32 picker_width = layout[mesh_picker].right - picker_left;
-                f32 relative_cursor_x = cursor_p.x - picker_left;
-                f32 item_width = picker_width / MESHES_IN_PICKER;
-                
-                s32 picked_index = CAST(s32, relative_cursor_x / item_width);
-                editor->current_mesh = CAST(u16, s_min(editor->mesh_count - 1, picked_index));
+                if((picked_x < (MESHES_IN_PICKER - 1)) || (picked_y > 0)) {
+                    if(picked_index >= editor->mesh_count) {
+                        FORI(editor->mesh_count, picked_index + 1) {
+                            edit_mesh_init(editor, &editor->meshes[i]);
+                        }
+                        
+                        editor->mesh_count = picked_index + 1;
+                    } else {
+                        editor->current_mesh = CAST(u16, s_min(editor->mesh_count - 1, picked_y * picker_height + picked_x));
+                    }
+                } else {
+                    editor->expanded_mesh_picker = !editor->expanded_mesh_picker;
+                    if(editor->expanded_mesh_picker) {
+                        layout[mesh_picker].bottom = MESH_PICKER_EXPANDED_BOTTOM;
+                    } else {
+                        layout[mesh_picker].bottom = MESH_PICKER_UNEXPANDED_BOTTOM;
+                    }
+                }
             }
         } break;
         
@@ -241,10 +338,9 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                 
                 if(hovered_vert == -1) {
                     // No vert hovered; add one.
-                    // @Incomplete: If not pressing the button, we should still highlight the candidate edge.
+                    v2 new_vertex = snap_vertex(mesh, cursor_p, current_layer_index, editor->snap_to_grid, editor->snap_to_edge);
                     
                     if(current_layer->vert_count < 64) {
-                        
                         if(current_layer->vert_count >= 3) {
                             // Find the proper location in which to insert the new vertex.
                             ssize candidate_insert_index = -1;
@@ -254,12 +350,12 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                             FORI(0, current_layer->vert_count) {
                                 v2 b = current_layer->verts[i];
                                 
-                                if((v2_inner(a - b, a - cursor_p) > 0.0f) && (v2_inner(b - a, b - cursor_p) > 0.0f) && (v2_cross_prod(b - a, cursor_p - a) < 0.0f)) {
+                                if((v2_inner(a - b, a - new_vertex) > 0.0f) && (v2_inner(b - a, b - new_vertex) > 0.0f) && (v2_cross_prod(b - a, new_vertex - a) < 0.0f)) {
                                     // We found an adequate edge.
                                     ok = true;
                                     
                                     v2 normal = v2_normalize(-v2_perp(b - a));
-                                    f32 dist = v2_inner(cursor_p - b, normal);
+                                    f32 dist = v2_inner(new_vertex - b, normal);
                                     if(dist < candidate_distance) {
                                         candidate_insert_index = i;
                                         candidate_distance = dist;
@@ -274,10 +370,10 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                                 FORI_REVERSE_NAMED(shift_index, current_layer->vert_count - 1, candidate_insert_index + 1) {
                                     current_layer->verts[shift_index] = current_layer->verts[shift_index - 1];
                                 }
-                                current_layer->verts[candidate_insert_index] = cursor_p;
+                                current_layer->verts[candidate_insert_index] = new_vertex;
                             }
                         } else {
-                            current_layer->verts[current_layer->vert_count++] = cursor_p;
+                            current_layer->verts[current_layer->vert_count++] = new_vertex;
                             ok = (current_layer->vert_count >= 3);
                         }
                     }
@@ -454,11 +550,17 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
         render_mesh(&renderer->command_queue, RESERVED_MESH_HANDLE::COLOR_PICKER, &instance);
     }
     
+    v4 colors[] = {
+        V4(1.0f, 0.5f, 1.0f, 1.0f),
+        V4(1.0f, 1.0f, 0.5f, 1.0f),
+        
+        V4(1.0f, 0.3f, 0.3f, 1.0f), // Toggle expand
+        
+        V4(0.5f, 0.7f, 0.3f, 1.0f), // Add 0
+        V4(0.3f, 1.0f, 0.3f, 1.0f), // Add 1
+    };
+    
     { // Layer picker
-        v4 colors[] = {
-            V4(1.0f, 0.5f, 1.0f, 1.0f),
-            V4(1.0f, 1.0f, 0.5f, 1.0f),
-        };
         rect2 aabb = layout[layer_picker];
         
         f32 item_height = (aabb.top - aabb.bottom) / MAX_LAYERS_PER_MESH;
@@ -470,31 +572,50 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
         
         FORI(0, MAX_LAYERS_PER_MESH) {
             instance.offset.y += item_height;
-            instance.color = colors[i & 1];
+            s32 color_index = i & 1;
+            if(i >= mesh->layer_count) {
+                color_index += 3;
+            }
+            instance.color = colors[color_index];
             
             render_quad(&renderer->command_queue, &instance);
         }
     }
     
     { // Mesh picker
-        v4 colors[] = {
-            V4(1.0f, 0.5f, 1.0f, 1.0f),
-            V4(1.0f, 1.0f, 0.5f, 1.0f),
-        };
         rect2 aabb = layout[mesh_picker];
         
-        f32 item_width = (aabb.right - aabb.left) / MESHES_IN_PICKER;
+        s32 picker_height = 1;
+        if(editor->expanded_mesh_picker) {
+            picker_height = MESHES_IN_PICKER;
+        }
         
         Mesh_Instance instance = {};
-        instance.offset = V2(aabb.left - item_width * 0.5f, (aabb.bottom + aabb.top) * 0.5f);
-        instance.scale = V2(item_width, aabb.top - aabb.bottom);
         instance.rot = V2(1.0f, 0.0f);
+        instance.scale = V2((aabb.right - aabb.left) / MESHES_IN_PICKER, (aabb.top - aabb.bottom) / CAST(f32, picker_height));
+        instance.offset.x = aabb.left - instance.scale.x * 0.5f;
         
-        FORI(0, MESHES_IN_PICKER) {
-            instance.offset.x += item_width;
-            instance.color = colors[i & 1];
-            
-            render_quad(&renderer->command_queue, &instance);
+        FORI_NAMED(y, 0, picker_height) {
+            FORI_NAMED(x, 0, MESHES_IN_PICKER) {
+                instance.offset.x = aabb.left + instance.scale.x * (0.5f + CAST(f32, x));
+                instance.offset.y = aabb.top  - instance.scale.y * (0.5f + CAST(f32, y));
+                
+                ssize mesh_index = x + y * MESHES_IN_PICKER;
+                if(y > 0) {
+                    // Ignore the expand button.
+                    mesh_index -= 1;
+                }
+                
+                s32 color_index = (x + y) & 1;
+                if((x == (MESHES_IN_PICKER - 1)) && (y == 0)) {
+                    color_index = 2;
+                } else if(mesh_index >= editor->mesh_count) {
+                    color_index += 3;
+                }
+                instance.color = colors[color_index];
+                
+                render_quad(&renderer->command_queue, &instance);
+            }
         }
     }
     
@@ -513,11 +634,11 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
         render_quad(&renderer->command_queue, &cursor);
     }
     
-    editor->last_cursor_p = cursor_p;
     advance_input(in);
     maybe_flush_draw_commands(&renderer->command_queue);
 }
 
+// @Incomplete
 void Implicit_Context::export_mesh(Mesh_Editor *editor) {
     SCOPE_MEMORY(&temporary_memory);
     auto mesh = &editor->meshes[editor->current_mesh];
@@ -529,6 +650,4 @@ void Implicit_Context::export_mesh(Mesh_Editor *editor) {
     serialized->scale = V2();
     serialized->rot = V2(1.0f, 0.0f);
     serialized->layer_count = 2;
-    
-    
 }
