@@ -225,12 +225,14 @@ static void center_cursor(HWND wnd_handle){
 static void win_capture_cursor() {
     while(ShowCursor(FALSE) >= 0)
         ;
+    
     win32.cursor_is_being_captured = true;
 }
 
 static void win_release_cursor() {
     while(ShowCursor(TRUE) < 0)
         ;
+    
     win32.cursor_is_being_captured = false;
 }
 
@@ -770,7 +772,7 @@ s32 WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             for(;;) {
                 
                 { // @@ We might want to move this closer to run_frame.
-                    // It turns out that using __rdtsc *AND* QueryPerformanceCounter is a bad
+                    // It turns out that using __rdtsc *AND* QueryPerformanceCounter together is a bad
                     // idea because, while __rdtsc always returns the CPU's timestamp, QueryPerformanceCounter
                     // compensates for QueryPerformanceFrequency sometimes being 1024 times less than it should,
                     // so we always use QueryPerformanceFrequency and QueryPerformanceCounter. Ultimately this
@@ -834,8 +836,8 @@ s32 WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 #endif
                 
                 if(win32.input_should_reload) {
-                    clear_input_state(&program_state.input);
                     win32.input_should_reload = false;
+                    clear_input_state(&program_state.input);
                 }
                 
                 win_sample_input(wnd_handle);

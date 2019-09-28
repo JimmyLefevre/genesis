@@ -61,6 +61,16 @@ static inline v2 unit_scale_to_world_space_offset(v2 p, f32 camera_zoom) {
     return result;
 }
 
+static inline v2 world_space_offset_to_unit_scale(v2 p, f32 camera_zoom) {
+    v2 camera_dim = V2(GAME_ASPECT_RATIO_X, GAME_ASPECT_RATIO_Y) * (1.0f / camera_zoom);
+    
+    v2 result = (p + camera_dim * 0.5f);
+    result.x /= camera_dim.x;
+    result.y /= camera_dim.y;
+    
+    return result;
+}
+
 static inline v2 rotate_around(v2 p, v2 center, v2 rotation) {
     v2 rel = p - center;
     v2 result = v2_complex_prod(rel, rotation);
@@ -1289,6 +1299,16 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Game *g, As
 #endif
 }
 
+static inline void open_menu(Game_Client *g_cl) {
+    os_platform.release_cursor();
+    g_cl->in_menu = true;
+}
+
+static inline void close_menu(Game_Client *g_cl) {
+    os_platform.capture_cursor();
+    g_cl->in_menu = false;
+}
+
 string Implicit_Context::tprint(char *literal, ...) {
     char *varargs;
     BEGIN_VARARG(varargs, literal);
@@ -1364,7 +1384,7 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
                 User_Config *config = (User_Config *)config_file.data;
                 
                 if(config->version == USER_CONFIG_VERSION) {
-                    logprint(global_log, STRING("Correct version config found. Loading."));
+                    logprint(global_log, STRING("Correct version config found. Loading.\n"));
                     program_state->should_be_fullscreen = config->fullscreen;
                     program_state->window_size = V2S(config->window_dim);
                     program_state->input_settings = config->input;
@@ -1372,11 +1392,11 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
                     
                     need_to_load_default_config = false;
                 } else {
-                    string s = tprint("Outdated config version (%d, expected %d). Ignoring.", config->version, USER_CONFIG_VERSION);
+                    string s = tprint("Outdated config version %d (expected %d). Ignoring.\n", config->version, USER_CONFIG_VERSION);
                     logprint(global_log, s);
                 }
             } else {
-                logprint(global_log, STRING("Config file was of incorrect length. Ignoring."));
+                logprint(global_log, "Config file was of incorrect length %u. Ignoring.\n", config_file.length);
             }
         }
         
@@ -1394,6 +1414,8 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
                 BIND_BUTTON(program_state->input_settings.bindings,   right,          D);
                 BIND_BUTTON(program_state->input_settings.bindings,    menu,     ESCAPE);
                 BIND_BUTTON(program_state->input_settings.bindings,    jump,   SPACEBAR);
+                BIND_BUTTON(program_state->input_settings.bindings,     run,     LSHIFT);
+                
                 BIND_BUTTON(program_state->input_settings.bindings,  editor,        TAB);
                 BIND_BUTTON(program_state->input_settings.bindings, profiler,     LCTRL);
                 
@@ -1612,15 +1634,13 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     
     if(BUTTON_PRESSED(&game_input, menu)) {
         if(g_cl->in_menu) {
-            // @XX
-            // close_menu(g_cl);
+            close_menu(g_cl);
             // If we don't do this, we send the same input to both the game and the menu,
             // which results in double presses which can lead to the menu reopening on the same
             // frame.
             advance_input(&game_input);
         } else {
-            // @XX
-            // open_menu(g_cl);
+            open_menu(g_cl);
         }
     }
     
@@ -1645,8 +1665,7 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
                 // g_full_update(&g_cl->g, &game_input, PHYSICS_DT, audio_info, &g_cl->assets.datapack);
                 
                 this_frame_sim_time += PHYSICS_DT;
-                os_platform.print(global_log->temporary_buffer);
-                global_log->temporary_buffer.length = 0;
+                flush_log_to_standard_output(global_log);
                 ++frames;
             }
             
@@ -1765,6 +1784,55 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
             os_platform.update_editable_mesh(renderer->command_queue.command_list_handle, handle, index_count, false);
         }
         
+        { // Hue picker.
+            // @Hack: We could make an HSV shader instead of lerping through all the hues.
+            v4 hues[] = {
+                V4(1.0f, 0.0f, 0.0f, 1.0f),
+                V4(1.0f, 1.0f, 0.0f, 1.0f),
+                V4(0.0f, 1.0f, 0.0f, 1.0f),
+                V4(0.0f, 1.0f, 1.0f, 1.0f),
+                V4(0.0f, 0.0f, 1.0f, 1.0f),
+                V4(1.0f, 0.0f, 1.0f, 1.0f),
+                V4(1.0f, 0.0f, 0.0f, 1.0f),
+            };
+            
+            Render_Vertex *vertex_mapped;
+            u16 *index_mapped;
+            u16 handle = os_platform.make_editable_mesh(sizeof(Render_Vertex), 2 * ARRAY_LENGTH(hues), CAST(u8 **, &vertex_mapped), CAST(u8 **, &index_mapped));
+            ASSERT(handle == RESERVED_MESH_HANDLE::HUE_PICKER);
+            
+            s32 index_count = 0;
+            {
+                f32 at_y = -0.5f;
+                f32 y_step = 1.0f / (ARRAY_LENGTH(hues) - 1);
+                vertex_mapped[0] = make_render_vertex(V2(-0.5f, at_y), hues[0]);
+                vertex_mapped[1] = make_render_vertex(V2(0.5f, at_y), hues[0]);
+                
+                u16 running_vertex_index = 2;
+                s32 running_index_index = 0;
+                FORI_NAMED(hue_index, 1, ARRAY_LENGTH(hues)) {
+                    at_y += y_step;
+                    
+                    vertex_mapped[running_vertex_index + 0] = make_render_vertex(V2(-0.5f, at_y), hues[hue_index]);
+                    vertex_mapped[running_vertex_index + 1] = make_render_vertex(V2(0.5f, at_y), hues[hue_index]);
+                    
+                    index_mapped[running_index_index + 0] = running_vertex_index - 2;
+                    index_mapped[running_index_index + 1] = running_vertex_index - 1;
+                    index_mapped[running_index_index + 2] = running_vertex_index + 1;
+                    index_mapped[running_index_index + 3] = running_vertex_index - 2;
+                    index_mapped[running_index_index + 4] = running_vertex_index + 1;
+                    index_mapped[running_index_index + 5] = running_vertex_index + 0;
+                    
+                    running_vertex_index += 2;
+                    running_index_index += 6;
+                }
+                
+                index_count = running_index_index;
+            }
+            
+            os_platform.update_editable_mesh(renderer->command_queue.command_list_handle, handle, index_count, true);
+        }
+        
         Output_Mesh mesh = {};
         { // Default edit mesh.
             // @Hardcoded
@@ -1784,7 +1852,7 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
             
             os_platform.update_editable_mesh(renderer->command_queue.command_list_handle, handle, index_count, false);
             
-            mesh_init(&info->mesh_editor);
+            mesh_init(game_block, &info->mesh_editor);
             
             mesh.handle = handle;
             mesh.vertex_mapped = vertex_mapped;
@@ -1800,6 +1868,8 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     
     mesh_update(&info->mesh_editor, renderer, &menu_input);
     program_state->input = menu_input;
+    
+    flush_log_to_standard_output(global_log);
     
     os_platform.submit_commands(&renderer->command_queue.command_list_handle, 1, true);
     

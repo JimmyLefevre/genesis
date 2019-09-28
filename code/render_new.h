@@ -9,6 +9,7 @@
 ENUM(RESERVED_MESH_HANDLE) {
     QUAD = 0,
     COLOR_PICKER,
+    HUE_PICKER,
 };
 
 struct Mesh_Instance;

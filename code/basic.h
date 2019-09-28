@@ -276,6 +276,7 @@ extern "C" {
     }
 }
 #endif
+
 static inline void zero_mem(void *mem, usize size) {
     memset(mem, 0, size);
 }
@@ -325,7 +326,7 @@ static void *push_size(Memory_Block *block, usize size, const u32 align = 4) {
     usize align_minus_one = (usize)align - 1;
     result = (result + align_minus_one) & ~align_minus_one;
     block->used = result - (uptr)block->mem + size;
-    ASSERT(block->used < block->size);
+    ASSERT(block->used <= block->size);
     return (void *)result;
 }
 

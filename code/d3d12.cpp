@@ -172,8 +172,8 @@ static char *new_shader = R"(
                         float4 color = input.color;
                         
                         
-                        p = float2((p.x * rot.x) - (p.y * rot.y), (p.x * rot.y) + (p.y * rot.x));
                         p *= scale;
+                        p = float2((p.x * rot.x) - (p.y * rot.y), (p.x * rot.y) + (p.y * rot.x));
                         p += offset;
                         
                           Vertex_Out output;

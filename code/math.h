@@ -1064,6 +1064,17 @@ static inline bool line_line_overlap(v2 a0, v2 b0, v2 a1, v2 b1) {
     return (t >= 0.0f) && (t <= 1.0f) && (s >= 0.0f) && (s <= 1.0f);
 }
 
+static inline f32 v2_line_distance(v2 a, v2 l0, v2 l1) {
+    v2 normal = v2_normalize(-v2_perp(l1 - l0));
+    v2 l0a = a - l0;
+    if(v2_inner(l0a, normal) < 0.0f) {
+        normal = -normal;
+    }
+    
+    f32 result = v2_inner(l0a, normal);
+    return result;
+}
+
 static inline rect2 rect2_4f(f32 left, f32 bottom, f32 right, f32 top){
     rect2 result = {};
     
@@ -1192,6 +1203,11 @@ static inline v4 v4_hadamard_prod(v4 a, v4 b) {
     result.z = a.z * b.z;
     result.w = a.w * b.w;
     
+    return result;
+}
+
+static inline f32 v4_length_sq(v4 a){
+    f32 result = a.x*a.x + a.y*a.y + a.z*a.z + a.w*a.w;
     return result;
 }
 

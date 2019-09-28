@@ -1,14 +1,4 @@
 
-static inline void open_menu(Game_Client *g_cl) {
-    os_platform.release_cursor();
-    g_cl->in_menu = true;
-}
-
-static inline void close_menu(Game_Client *g_cl) {
-    os_platform.capture_cursor();
-    g_cl->in_menu = false;
-}
-
 static void update_slider(rect2 *aabb, Slider *slider, v2 p) {
     f32 lerp_factor = (p.x - aabb->left) / (aabb->right - aabb->left);
     lerp_factor = f_clamp(lerp_factor, 0.0f, 1.0f);

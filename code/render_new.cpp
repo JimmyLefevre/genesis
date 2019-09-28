@@ -1,4 +1,15 @@
 
+static Mesh_Instance make_mesh_instance(rect2 rect, v4 color) {
+    Mesh_Instance result;
+    
+    result.offset = rect2_center(rect);
+    result.scale = rect2_dim(rect);
+    result.rot = V2(1.0f, 0.0f);
+    result.color = color;
+    
+    return result;
+}
+
 static inline void flush_draw_commands(Render_Command_Queue *queue) {
     ASSERT(queue->instance_count > 0);
     
@@ -49,7 +60,6 @@ static Mesh_Instance *reserve_instances(Render_Command_Queue *queue, u16 mesh_ha
     
     Mesh_Instance *result = &queue->instances[current_instance_count];
     current_instance_count = new_instance_count;
-    
     return result;
 }
 
@@ -68,17 +78,6 @@ static inline void render_quad(Render_Command_Queue *queue, Mesh_Instance instan
 }
 static inline void render_quads(Render_Command_Queue *queue, Mesh_Instance *instance, s32 quad_count) {
     render_meshes(queue, RESERVED_MESH_HANDLE::QUAD, instance, quad_count);
-}
-
-static Mesh_Instance make_quad_instance_minmax(v2 min, v2 max, v4 color) {
-    Mesh_Instance result;
-    
-    result.offset = (max + min) * 0.5f;
-    result.scale = max - min;
-    result.rot = V2(1.0f, 0.0f);
-    result.color = color;
-    
-    return result;
 }
 
 static void render_set_transform_game_camera(u16 handle, v2 p, v2 rot, f32 zoom) {
@@ -156,4 +155,9 @@ static inline void render_begin_frame_and_clear(Renderer *renderer, v4 clear_col
 
 static void render_end_frame(Renderer* renderer) {
     os_platform.end_frame();
+}
+
+static void set_color_picker_hue(Renderer *renderer, u16 command_list_handle, v4 hue) {
+    *renderer->color_picker_color = hue;
+    os_platform.update_editable_mesh(command_list_handle, RESERVED_MESH_HANDLE::COLOR_PICKER, 6, false);
 }

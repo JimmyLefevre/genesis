@@ -4,16 +4,15 @@
 //
 Mesh editor:
 - Functionality:
--   Hide non-selected layers
--   Exporting and importing
--   Changing color picker hue
--   Pick another layer's color
+-   Exporting and importing.
+-   Actually one mesh per mesh :NeedToGenerateMultipleOutputMeshes
+
+-   Hide non-selected layers.
+-   Disallow placing clockwise verts.
 - Interface:
--   Show current non-obvious settings (snap, layer and mesh selection).
 -   Display each mesh in its corresponding button in the picker
 -   Display each layer in its corresponding button in the picker
 -   Add "+" symbols to "add" buttons in the picker
--   Highlight current "would extrude vert from that one" edge.
 
 Graphics:
 - Enable depth testing.

@@ -46,3 +46,8 @@ static void headsup(Log *log, char *format, ...) {
     log->heads_up_buffer.length = _print((char *)log->heads_up_buffer.data, log->heads_up_buffer_size, format, varargs);
     log->heads_up_alpha = 1.0f;
 }
+
+static void flush_log_to_standard_output(Log *log) {
+    os_platform.print(log->temporary_buffer);
+    log->temporary_buffer.length = 0;
+}

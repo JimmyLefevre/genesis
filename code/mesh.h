@@ -14,8 +14,8 @@ struct Output_Mesh {
     Render_Vertex *vertex_mapped; 
     u16 *index_mapped; 
     
-    s32 vert_count;
-    s32 index_count;
+    u16 vert_count;
+    u16 index_count;
     
     v2 default_offset;
     v2 default_scale;
@@ -26,17 +26,31 @@ struct Edit_Mesh_Layer {
     v2 verts[MAX_VERTS_PER_LAYER];
     u16 indices[MAX_INDICES_PER_LAYER];
     
-    s32 vert_count;
+    u16 vert_count;
     
     v4 color;
 };
 
 struct Edit_Mesh {
-    s32 layer_count;
-    s32 current_layer;
+    u16 layer_count;
+    u16 current_layer;
     Edit_Mesh_Layer layers[MAX_LAYERS_PER_MESH];
     
     Output_Mesh output;
+};
+
+struct Serialized_Edit_Mesh_Layer {
+    v4 color;
+    u16 vert_count;
+    // v2 verts[vert_count];
+    // u16 indices[(vert_count - 2) * 3];
+};
+
+struct Edit_Mesh_Undo {
+    u16 mesh_index;
+    u16 layer_index;
+    
+    Serialized_Edit_Mesh_Layer layer;
 };
 
 #define MESHES_IN_PICKER 8
@@ -44,21 +58,75 @@ ENUM(MESH_EDITOR_UI_SELECTION) {
     NONE,
     
     VERTEX,
+    EDGE,
     
     COLOR_PICKER,
+    HUE_PICKER,
     LAYER_PICKER,
     MESH_PICKER,
     
     COUNT,
 };
 
-struct Mesh_Editor {
+struct Mesh_Interaction {
     s32 selection;
     
-    s32 selected_vert;
-    v2 vert_drag_start;
-    v2 cursor_drag_start;
+    union {
+        struct {
+            s32 index;
+            v2 vert_drag_start;
+            v2 cursor_drag_start;
+        } vert;
+        
+        struct {
+            s32 index;
+            
+            v2 vert_starts[2];
+            v2 cursor_start;
+            v2 left_adjacent_dir;
+            v2 right_adjacent_dir;
+            
+            v2 last_drag;
+            v2 last_drag_cursor_p;
+            v2 last_rotation;
+            f32 last_scale;
+        } edge;
+        
+        struct {
+            v4 layer_color_before;
+        } color_picker;
+    };
+};
+
+struct Mesh_Hover {
+    s32 selection;
     
+    s32 index;
+};
+
+#define UNDO_RING_BUFFER_MAX_ALLOCATION_COUNT 1024
+#define UNDO_RING_BUFFER_ALLOCATION_MASK (UNDO_RING_BUFFER_MAX_ALLOCATION_COUNT - 1)
+struct Undo_Ring_Buffer {
+    Memory_Block block;
+    
+    usize allocation_offsets[1024]; // Sorted
+    u16 wrap_length;
+    u16 oldest_allocation;
+    u16 first_free;
+    u16 start_of_undo_chain;
+    
+    // @Compression
+    bool all_undos_popped;
+    bool all_redos_popped;
+    bool just_saved_snapshot;
+};
+
+struct Mesh_Editor {
+    Undo_Ring_Buffer undo_buffer;
+    
+    Mesh_Interaction interaction;
+    
+    // @Compression
     bool highlight_all_vertices;
     bool snap_to_grid;
     bool snap_to_edge;

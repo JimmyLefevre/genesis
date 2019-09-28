@@ -36,6 +36,6 @@ static void process_key(u32 *bindings, Input *in, u32 key_value, bool down) {
     }
 }
 
-inline void advance_input(Input *in) {
+static inline void advance_input(Input *in) {
     in->old_button_state = in->new_button_state;
 }
