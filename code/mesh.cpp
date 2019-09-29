@@ -413,7 +413,7 @@ static void import_mesh(Edit_Mesh *mesh) {
 
 static v2 unit_scale_to_world_space_offset(v2, f32);
 static v2 world_space_offset_to_unit_scale(v2, f32);
-void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Input *in) {
+void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Input *in, Render_Command_Queue *command_queue) {
     using namespace MESH_EDITOR_UI_SELECTION;
     SCOPE_MEMORY(&temporary_memory);
     
@@ -795,9 +795,9 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             rect2 picker = layout[hue_picker];
             
             if(cursor_p.y <= picker.bottom) {
-                set_color_picker_hue(renderer, renderer->command_queue.command_list_handle, hues[0]);
+                set_color_picker_hue(renderer, command_queue->command_list_handle, hues[0]);
             } else if(cursor_p.y >= picker.top) {
-                set_color_picker_hue(renderer, renderer->command_queue.command_list_handle, hues[ARRAY_LENGTH(hues)-1]);
+                set_color_picker_hue(renderer, command_queue->command_list_handle, hues[ARRAY_LENGTH(hues)-1]);
             } else {
                 f32 picker_height = picker.top - picker.bottom;
                 f32 item_height = picker_height / (ARRAY_LENGTH(hues) - 1);
@@ -809,7 +809,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                 
                 v4 color = v4_lerp(hues[item_index], hues[item_index + 1], lerp_factor);
                 
-                set_color_picker_hue(renderer, renderer->command_queue.command_list_handle, color);
+                set_color_picker_hue(renderer, command_queue->command_list_handle, color);
             }
         } break;
         
@@ -1005,7 +1005,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             mesh->output.index_count = CAST(u16, running_index_index);
         }
         
-        os_platform.update_editable_mesh(renderer->command_queue.command_list_handle, mesh->output.handle, mesh->output.index_count, false);
+        os_platform.update_editable_mesh(command_queue->command_list_handle, mesh->output.handle, mesh->output.index_count, false);
     }
     
     //
@@ -1024,7 +1024,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
     
     {
         Mesh_Instance instance = {mesh->output.default_offset, mesh->output.default_scale, mesh->output.default_rot, V4(1.0f)};
-        render_mesh(&renderer->command_queue, mesh->output.handle, &instance);
+        render_mesh(command_queue, mesh->output.handle, &instance);
     }
     
     if(editor->highlight_all_vertices) {
@@ -1039,7 +1039,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                     highlight.rot = V2(1.0f, 0.0f);
                     highlight.color = (layer_index == 0) ? V4(1.0f, 1.0f, 0.0f, 1.0f) : V4(0.5f, 0.5f, 0.5f, 1.0f);
                     
-                    render_quad(&renderer->command_queue, &highlight);
+                    render_quad(command_queue, &highlight);
                 }
             }
         }
@@ -1053,7 +1053,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
         hover_highlight.rot = V2(1.0f, 0.0f);
         hover_highlight.color = V4(0.0f, 1.0f, 0.0f, 1.0f);
         
-        render_quad(&renderer->command_queue, &hover_highlight);
+        render_quad(command_queue, &hover_highlight);
     } else if((hover.selection == EDGE) && (interaction->selection == NONE)) {
         Mesh_Instance hover_highlight = {};
         
@@ -1066,7 +1066,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
         hover_highlight.rot = v2_normalize(b - a);
         hover_highlight.color = V4(0.0f, 1.0f, 0.0f, 1.0f);
         
-        render_quad(&renderer->command_queue, &hover_highlight);
+        render_quad(command_queue, &hover_highlight);
     }
     
     //
@@ -1086,7 +1086,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             instance.color.g = 1.0f;
         }
         
-        render_quad(&renderer->command_queue, &instance);
+        render_quad(command_queue, &instance);
         
         instance.offset.x += instance.scale.x + margin;
         if(editor->snap_to_edge) {
@@ -1097,17 +1097,17 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             instance.color.g = 0.0f;
         }
         
-        render_quad(&renderer->command_queue, &instance);
+        render_quad(command_queue, &instance);
     }
     
     { // Color picker
         Mesh_Instance instance = make_mesh_instance(layout[color_picker], V4(1.0f, 1.0f, 1.0f, 1.0f));
-        render_mesh(&renderer->command_queue, RESERVED_MESH_HANDLE::COLOR_PICKER, &instance);
+        render_mesh(command_queue, RESERVED_MESH_HANDLE::COLOR_PICKER, &instance);
     }
     
     { // Hue picker
         Mesh_Instance instance = make_mesh_instance(layout[hue_picker], V4(1.0f));
-        render_mesh(&renderer->command_queue, RESERVED_MESH_HANDLE::HUE_PICKER, &instance);
+        render_mesh(command_queue, RESERVED_MESH_HANDLE::HUE_PICKER, &instance);
     }
     
     v4 colors[] = {
@@ -1143,7 +1143,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             }
             instance.color = colors[color_index];
             
-            render_quad(&renderer->command_queue, &instance);
+            render_quad(command_queue, &instance);
         }
     }
     
@@ -1181,7 +1181,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                 }
                 instance.color = colors[color_index];
                 
-                render_quad(&renderer->command_queue, &instance);
+                render_quad(command_queue, &instance);
             }
         }
     }
@@ -1200,16 +1200,16 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
         cursor.color = V4(1.0f - layer_color.r, 1.0f - layer_color.g, 1.0f - layer_color.b, layer_color.a);
         
         if(interaction->selection != VERTEX) {
-            render_quad(&renderer->command_queue, &cursor);
+            render_quad(command_queue, &cursor);
             
             cursor.color = layer_color;
         }
         
         cursor.scale *= 0.35f;
-        render_quad(&renderer->command_queue, &cursor);
+        render_quad(command_queue, &cursor);
     }
     
     in->xhairp = world_space_offset_to_unit_scale(cursor_p, 1.0f);
     advance_input(in);
-    maybe_flush_draw_commands(&renderer->command_queue);
+    maybe_flush_draw_commands(command_queue);
 }

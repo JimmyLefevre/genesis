@@ -108,7 +108,7 @@ void Implicit_Context::render_init(Renderer* renderer, Memory_Block* block, u8 c
     SCOPE_MEMORY(&temporary_memory);
     renderer->core_count = core_count;
     
-    s32 command_batch_count = core_count;
+    s32 command_batch_count = 2; // :OneCommandListPerFrame
     
     auto command_list_handles     = push_array(&temporary_memory, u16, command_batch_count);
     
@@ -136,24 +136,32 @@ void Implicit_Context::render_init(Renderer* renderer, Memory_Block* block, u8 c
     os_platform.make_vertex_buffers(vertex_buffers, vertex_buffer_vert_sizes, vertex_buffer_lengths, command_batch_count);
     os_platform.make_vertex_buffers(instance_buffers, instance_buffer_vert_sizes, instance_buffer_lengths, command_batch_count);
     
-    { // @Hardcoded command queue
-        auto queue = &renderer->command_queue;
+    // Frame state:
+    FORI(0, command_batch_count) {
+        auto queue = &renderer->command_queues[i];
+        auto instance_buffer = &instance_buffers[i];
         
-        queue->command_list_handle = command_list_handles[0];
+        queue->command_list_handle = command_list_handles[i];
         
-        auto instance_buffer = instance_buffers[0];
-        queue->instance_buffer_handle = instance_buffer.handle;
-        queue->instances = CAST(Mesh_Instance *, instance_buffer.mapped_buffer);
-        queue->instance_capacity = INSTANCE_BUFFER_SIZE;
+        queue->instance_buffer_handle = instance_buffer->handle;
+        queue->instances = CAST(Mesh_Instance *, instance_buffer->mapped_buffer);
+        queue->instance_capacity = instance_buffer_lengths[i];
         queue->draw_commands = push_array(block, Draw_Command, queue->instance_capacity);
     }
+    
+    renderer->command_queue_count = command_batch_count;
+}
+
+static inline Render_Command_Queue *get_current_command_queue(Renderer *renderer) {
+    return &renderer->command_queues[renderer->current_frame_index & 1]; // :OneCommandListPerFrame
 }
 
 static inline void render_begin_frame_and_clear(Renderer *renderer, v4 clear_color) {
-    os_platform.begin_frame_and_clear(renderer->command_queue.command_list_handle, clear_color);
+    os_platform.begin_frame_and_clear(get_current_command_queue(renderer)->command_list_handle, CAST(u16, renderer->current_frame_index), clear_color);
 }
 
 static void render_end_frame(Renderer* renderer) {
+    renderer->current_frame_index += 1;
     os_platform.end_frame();
 }
 

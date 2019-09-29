@@ -1729,11 +1729,13 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     // Dumb debug frame
     render_begin_frame_and_clear(renderer, V4(1.0f, 0.0f, 1.0f, 1.0f));
     
-    render_set_transform_game_camera(renderer->command_queue.command_list_handle, V2(), V2(1.0f, 0.0f), 1.0f);
+    Render_Command_Queue *command_queue = get_current_command_queue(renderer);
+    render_set_transform_game_camera(command_queue->command_list_handle, V2(), V2(1.0f, 0.0f), 1.0f);
     
+    // @Hack
     static bool first_pass = true;
     if(first_pass) { // Generate basic meshes.
-        first_pass = !first_pass;
+        first_pass = false;
         
         { // Basic quad.
             s32 index_count = 6;
@@ -1754,7 +1756,7 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
             index_mapped[4] = 2;
             index_mapped[5] = 3;
             
-            os_platform.update_editable_mesh(renderer->command_queue.command_list_handle, handle, index_count, true);
+            os_platform.update_editable_mesh(command_queue->command_list_handle, handle, index_count, true);
         }
         
         { // Color picker.
@@ -1781,7 +1783,7 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
             
             renderer->color_picker_color = &vertex_mapped[0].color;
             
-            os_platform.update_editable_mesh(renderer->command_queue.command_list_handle, handle, index_count, false);
+            os_platform.update_editable_mesh(command_queue->command_list_handle, handle, index_count, false);
         }
         
         { // Hue picker.
@@ -1830,7 +1832,7 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
                 index_count = running_index_index;
             }
             
-            os_platform.update_editable_mesh(renderer->command_queue.command_list_handle, handle, index_count, true);
+            os_platform.update_editable_mesh(command_queue->command_list_handle, handle, index_count, true);
         }
         
         Output_Mesh mesh = {};
@@ -1850,7 +1852,7 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
             index_mapped[1] = 1;
             index_mapped[2] = 2;
             
-            os_platform.update_editable_mesh(renderer->command_queue.command_list_handle, handle, index_count, false);
+            os_platform.update_editable_mesh(command_queue->command_list_handle, handle, index_count, false);
             
             mesh_init(game_block, &info->mesh_editor);
             
@@ -1866,12 +1868,12 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
         }
     }
     
-    mesh_update(&info->mesh_editor, renderer, &menu_input);
+    mesh_update(&info->mesh_editor, renderer, &menu_input, command_queue);
     program_state->input = menu_input;
     
     flush_log_to_standard_output(global_log);
     
-    os_platform.submit_commands(&renderer->command_queue.command_list_handle, 1, true);
+    os_platform.submit_commands(&command_queue->command_list_handle, 1, true);
     
     render_end_frame(renderer);
 #endif

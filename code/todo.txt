@@ -5,7 +5,6 @@
 Mesh editor:
 - Functionality:
 -   Actually one mesh per mesh :NeedToGenerateMultipleOutputMeshes
-
 -   Hide non-selected layers.
 -   Disallow placing clockwise verts.
 - Interface:

@@ -56,7 +56,7 @@ static inline Render_Vertex make_render_vertex(v2 p, v4 color) {
     return result;
 }
 
-#define GPU_BEGIN_FRAME_AND_CLEAR(name) void name(u16 list_handle, v4 clear_color)
+#define GPU_BEGIN_FRAME_AND_CLEAR(name) void name(u16 list_handle, u16 frame_index, v4 clear_color)
 typedef GPU_BEGIN_FRAME_AND_CLEAR(gpu_begin_frame_and_clear);
 #define GPU_END_FRAME(name) void name()
 typedef GPU_END_FRAME(gpu_end_frame);

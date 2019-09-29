@@ -32,7 +32,7 @@ struct Implicit_Context {
     void text_update(Text_Info *, Renderer *);
     void render_init(Renderer*, Memory_Block*, u8);
     s16* update_synth(Synth*, const s32);
-    void mesh_update(Mesh_Editor *, Renderer *, Input *);
+    void mesh_update(Mesh_Editor *, Renderer *, Input *, Render_Command_Queue *);
     void export_mesh(Edit_Mesh *);
     
     void draw_game_threaded(void *);

@@ -26,7 +26,10 @@ struct Render_Command_Queue {
     s32 draw_command_count;
 };
 
+#define MAX_RENDER_COMMAND_QUEUE_COUNT 8
 struct Renderer {
+    u32 current_frame_index;
+    
     v2 render_target_dim;
     u8 core_count;
     
@@ -34,12 +37,12 @@ struct Renderer {
     u16 color_picker_mesh_handle;
     v4 *color_picker_color;
     
-    Render_Command_Queue command_queue;
+    Render_Command_Queue command_queues[8];
+    s32 command_queue_count;
     
     // Threading
     u32 render_jobs_issued;
     volatile s32 render_jobs_finished;
     volatile s32 command_batches_queued;
     volatile s32 command_flushes;
-    
 };
