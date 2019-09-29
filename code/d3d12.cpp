@@ -828,8 +828,12 @@ GPU_SUBMIT_COMMANDS(submit_commands) {
 }
 
 static void begin_frame_and_clear(u16 list_handle, u16 frame_index, v4 clear_color) {
+    // @Cleanup?
+    // We're both waiting for a backbuffer to be available (FrameLatencyWaitableObject) and for 
+    // the next buffer's commands to be done executing. This is probably redundant?
     WaitForSingleObject(d3d.swap_chain3->GetFrameLatencyWaitableObject(), INFINITE);
-    d3d.command_queue->Signal(d3d.frame_completion_fence, d3d.frame_completion_fence_value); // @Hardcoded double buffering
+    // This is @Hardcoded for double buffering too; do we care?
+    d3d.command_queue->Signal(d3d.frame_completion_fence, d3d.frame_completion_fence_value);
     
     if(d3d.changed_pipeline_state_desc) {
         d3d.device->CreateGraphicsPipelineState(&d3d.pipeline_state_desc, IID_PPV_ARGS(&d3d.pipeline_state));
