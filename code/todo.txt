@@ -4,7 +4,6 @@
 //
 Mesh editor:
 - Functionality:
--   Exporting and importing.
 -   Actually one mesh per mesh :NeedToGenerateMultipleOutputMeshes
 
 -   Hide non-selected layers.

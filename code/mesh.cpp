@@ -291,6 +291,126 @@ static void restore_state(Mesh_Editor *editor, Edit_Mesh_Undo *undo) {
     }
 }
 
+struct Serialized_Mesh_Layout {
+    Serialized_Mesh *header;
+    
+    v4 *layer_colors;
+    u16 *layer_running_vert_count;
+    
+    v2 *verts;
+    u16 *indices;
+};
+
+static usize layout_serialized_mesh(Serialized_Mesh *mesh, Serialized_Mesh_Layout *layout,
+                                    s32 vert_total) {
+    usize length = 0;
+    s32 layer_count = mesh->layer_count;
+    
+    layout->header = mesh;
+    length += sizeof(Serialized_Mesh);
+    
+    layout->layer_colors = CAST(v4 *, mesh + 1);
+    length += sizeof(v4) * layer_count;
+    
+    layout->layer_running_vert_count = CAST(u16 *, layout->layer_colors + layer_count);
+    length += sizeof(u16) * layer_count;
+    
+    if(vert_total == -1) {
+        vert_total = layout->layer_running_vert_count[layer_count - 1];
+    }
+    
+    layout->verts = CAST(v2 *, layout->layer_running_vert_count + layer_count);
+    length += sizeof(v2) * vert_total;
+    
+    layout->indices = CAST(u16 *, layout->verts + vert_total);
+    s32 index_total = s_max(0, (vert_total - (layer_count << 1)) * 3);
+    length += sizeof(u16) * index_total;
+    
+    return length;
+}
+
+void Implicit_Context::export_mesh(Edit_Mesh *mesh) {
+    Scoped_Memory scoped_memory = Scoped_Memory(&temporary_memory);
+    auto layer_count = mesh->layer_count;
+    
+    Serialized_Mesh *serialized = CAST(Serialized_Mesh *, temporary_memory.mem + temporary_memory.used);
+    
+    // @Hardcoded
+    serialized->offset = V2();
+    serialized->scale = V2();
+    serialized->rot = V2(1.0f, 0.0f);
+    
+    ASSERT(layer_count <= 255);
+    serialized->layer_count = CAST(u8, layer_count);
+    
+    s32 vert_total = 0;
+    FORI(0, layer_count) {
+        vert_total += mesh->layers[i].vert_count;
+    }
+    
+    Serialized_Mesh_Layout layout;
+    
+    usize length = layout_serialized_mesh(serialized, &layout, vert_total);
+    
+    if(length <= (temporary_memory.size - temporary_memory.used)) {
+        u16 running_vert_count = 0;
+        u16 running_index_count = 0;
+        FORI(0, layer_count) {
+            u16 vert_count = mesh->layers[i].vert_count;
+            u16 index_count = CAST(u16, index_count_or_zero(vert_count));
+            
+            mem_copy(mesh->layers[i].verts, layout.verts + running_vert_count, sizeof(v2) * vert_count);
+            mem_copy(mesh->layers[i].indices, layout.indices + running_index_count, sizeof(u16) * index_count);
+            
+            running_vert_count += vert_count;
+            running_index_count += index_count;
+            
+            layout.layer_colors[i] = mesh->layers[i].color;
+            layout.layer_running_vert_count[i] = running_vert_count;
+        }
+        
+        string file;
+        file.data = CAST(u8 *, serialized);
+        file.length = length;
+        
+        os_platform.write_entire_file(STRING("test.mesh"), file);
+    } else UNHANDLED;
+}
+
+static void import_mesh(Edit_Mesh *mesh) {
+    string file = os_platform.read_entire_file(STRING("test.mesh"));
+    
+    if(file.data) {
+        Serialized_Mesh *serialized = CAST(Serialized_Mesh *, file.data);
+        Serialized_Mesh_Layout layout;
+        layout_serialized_mesh(serialized, &layout, -1);
+        
+        ASSERT(serialized->layer_count);
+        u16 layer_count = serialized->layer_count;
+        mesh->layer_count = layer_count;
+        mesh->current_layer = 0;
+        
+        u16 running_vert_count = 0;
+        u16 running_index_count = 0;
+        FORI(0, layer_count) {
+            Edit_Mesh_Layer *layer = &mesh->layers[i];
+            
+            u16 vert_count = layout.layer_running_vert_count[i] - running_vert_count;
+            u16 index_count = CAST(u16, index_count_or_zero(vert_count));
+            
+            mem_copy(layout.verts + running_vert_count,    layer->verts,   sizeof(v2)  *  vert_count);
+            mem_copy(layout.indices + running_index_count, layer->indices, sizeof(u16) * index_count);
+            
+            running_vert_count += vert_count;
+            running_index_count += index_count;
+            
+            layer->vert_count = vert_count;
+            layer->color = layout.layer_colors[i];
+        }
+    }
+}
+
+
 static v2 unit_scale_to_world_space_offset(v2, f32);
 static v2 world_space_offset_to_unit_scale(v2, f32);
 void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Input *in) {
@@ -310,14 +430,20 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
     bool should_draw_cursor = true;
     bool triangulate_layer = false;
     
-    bool did_undo = false;
+    // @Hack
+    static bool first_pass = true;
+    if(first_pass) {
+        first_pass = false;
+        import_mesh(mesh);
+        triangulate_layer = true;
+    }
+    
     if(BUTTON_PRESSED(in, slot1)) {
         // Undo.
         Edit_Mesh_Undo *undo = maybe_undo(&editor->undo_buffer);
         if(undo) {
             restore_state(editor, undo);
             
-            did_undo = true;
             triangulate_layer = true;
         }
     } else if(BUTTON_PRESSED(in, slot2)) {
@@ -326,7 +452,6 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
         if(redo) {
             restore_state(editor, redo);
             
-            did_undo = true;
             triangulate_layer = true;
         }
     }
@@ -352,6 +477,12 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
     }
     if(BUTTON_PRESSED(in, down)) {
         editor->snap_to_edge = !editor->snap_to_edge;
+    }
+    if(BUTTON_PRESSED(in, right)) {
+        export_mesh(mesh);
+        import_mesh(mesh);
+        
+        triangulate_layer = true;
     }
     
     s32 current_layer_index = mesh->current_layer;
@@ -1081,18 +1212,4 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
     in->xhairp = world_space_offset_to_unit_scale(cursor_p, 1.0f);
     advance_input(in);
     maybe_flush_draw_commands(&renderer->command_queue);
-}
-
-// @Incomplete
-void Implicit_Context::export_mesh(Mesh_Editor *editor) {
-    SCOPE_MEMORY(&temporary_memory);
-    auto mesh = &editor->meshes[editor->current_mesh];
-    
-    Serialized_Mesh *serialized = push_struct(&temporary_memory, Serialized_Mesh, 1);
-    
-    // @Hardcoded
-    serialized->offset = V2();
-    serialized->scale = V2();
-    serialized->rot = V2(1.0f, 0.0f);
-    serialized->layer_count = 2;
 }

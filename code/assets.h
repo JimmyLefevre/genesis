@@ -510,7 +510,8 @@ struct Serialized_Mesh { // ;Serialized
     u8 layer_count;
     
     // v4 layer_colors[layer_count];
-    // u16 layer_last_verts[layer_count];
+    // u16 layer_running_vert_total[layer_count];
     
-    // v2 verts[layer_last_verts[layer_count-1]]];
+    // v2 verts[layer_running_vert_total[layer_count-1]];
+    // u16 indices[sum(index_count_or_zero(layer_counts))]; where layer_counts is running_total[i] - running_total[i-1]
 };

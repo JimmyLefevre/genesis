@@ -120,10 +120,7 @@ static usize win_file_size(void *file_handle) {
 static void *win_open_file_utf16(u16 *file_name) {
     HANDLE file_handle = CreateFileW(CAST(LPCWSTR, file_name), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
     
-    if(CAST(uptr, file_handle) != HFILE_ERROR) {
-        return file_handle;
-    } 
-    return 0;
+    return file_handle;
 }
 
 static void *win_open_file_utf8(string file_name) {
@@ -162,7 +159,6 @@ static OS_READ_ENTIRE_FILE(win_read_entire_file) {
     void *file_handle = win_open_file_utf16(utf16filename);
     
     if(file_handle != INVALID_HANDLE_VALUE) {
-        
         u64 file_size = win_file_size(file_handle);
         ASSERT(file_size);
         ASSERT(file_size <= 0xFFFFFFFF);

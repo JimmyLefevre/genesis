@@ -27,7 +27,7 @@ REM cl %CommonCompilerFlags% ..\..\%ProjectName%\code\win_main.cpp /link -subsys
 
 REM 64-bit build
 REM Optimization switches /wO2
-REM cl %CommonCompilerFlags% ..\..\%ProjectName%\code\win_main.cpp %NoCRTCompilerFlags% -Fewin_%ProjectName%.exe -Fm /link %CommonLinkerFlags% %NoCRTLinkerFlags% kernel32.lib user32.lib gdi32.lib winmm.lib shlwapi.lib D3D12.lib DXGI.lib
+cl %CommonCompilerFlags% ..\..\%ProjectName%\code\win_main.cpp %NoCRTCompilerFlags% -Fewin_%ProjectName%.exe -Fm /link %CommonLinkerFlags% %NoCRTLinkerFlags% kernel32.lib user32.lib gdi32.lib winmm.lib shlwapi.lib D3D12.lib DXGI.lib
 cl %CommonCompilerFlags% -MTd ..\..\%ProjectName%\code\game.cpp -Fe%ProjectName% -Fd -LDd -Fm %NoCRTCompilerFlags% /link -PDB:%ProjectName%%random%.pdb %NoCRTLinkerFlags% %CommonLinkerFlags% -EXPORT:g_get_api
 
 REM cl %CommonCompilerFlags% ..\..\%ProjectName%\code\datapacker.cpp /link %CommonLinkerFlags% kernel32.lib user32.lib
