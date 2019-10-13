@@ -6,12 +6,6 @@
 #define VERTEX_BUFFER_SIZE 256
 #define INSTANCE_BUFFER_SIZE 256
 
-ENUM(RESERVED_MESH_HANDLE) {
-    QUAD = 0,
-    COLOR_PICKER,
-    HUE_PICKER,
-};
-
 struct Mesh_Instance;
 struct Draw_Command;
 struct Render_Command_Queue {
@@ -36,6 +30,8 @@ struct Renderer {
     u16 quad_mesh_handle;
     u16 color_picker_mesh_handle;
     v4 *color_picker_color;
+    
+    u16 mesh_handles[Mesh_Uid::count];
     
     Render_Command_Queue command_queues[8];
     s32 command_queue_count;

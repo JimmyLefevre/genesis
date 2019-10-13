@@ -15,9 +15,11 @@ enum Game_Button_Index {
     GAME_BUTTON_INDEX_right    = 9,
     GAME_BUTTON_INDEX_menu     = 10,
     GAME_BUTTON_INDEX_jump     = 11,
-    GAME_BUTTON_INDEX_editor   = 12,
-    GAME_BUTTON_INDEX_profiler = 13,
-    GAME_BUTTON_INDEX_run      = 14,
+    GAME_BUTTON_INDEX_run      = 12,
+    GAME_BUTTON_INDEX_crouch   = 13,
+    
+    GAME_BUTTON_INDEX_editor   = 14,
+    GAME_BUTTON_INDEX_profiler = 15,
     
     // When adding bindings, check that the integer type holds enough bits to support it!
     GAME_BUTTON_COUNT,

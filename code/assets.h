@@ -2,27 +2,25 @@
 #define DATAPACK_VERSION 1
 
 enum Asset_UID {
-    // Fonts
-    ASSET_UID_hack_ttf = 0,
-    ASSET_UID_charter_italic_ttf,
-    ASSET_UID_charter_regular_ttf,
-    
-    // Music
-    ASSET_UID_danse_macabre_stereo_uvga,
-    
-    // Sounds
-    ASSET_UID_erase_uvga,
-    
-    // Texture atlases
-    ASSET_UID_test_ta,
-    
-    // Levels
-    ASSET_UID_1_lvl,
-    
-    // Whatevers
-    ASSET_UID_test_midi,
+    ASSET_UID_player_mesh,
+    ASSET_UID_ball_mesh,
+    ASSET_UID_partner_mesh,
     
     ASSET_UID_COUNT,
+};
+
+ENUM(Mesh_Uid) {
+    quad = 0,
+    color_picker,
+    hue_picker,
+    
+    player,
+    ball,
+    partner,
+    
+    edit_mesh,
+    
+    count,
 };
 
 enum Texture_Uid {
@@ -459,18 +457,28 @@ struct Asset_Storage {
 // Synth Input
 //
 
-#define SYNTH_INPUT_VERSION 0
+#define SYNTH_INPUT_VERSION 2
 
+#pragma pack(push, 1)
 struct Synth_Input_Note {
     s32 start;
-    s32 duration;
-    u8  key;
-    u8  velocity;
+    s32 duration; // @Compression
+    
+    f32 velocity; // @Compression: Normalized 0 -> 1 in integer?
+    u8 midi_key; // @Compression: midi_key on 7 bits?
+};
+struct Synth_Input_Pitch_Bend {
+    s32 center_sample; // @Compression
+    s32 radius;        // @Compression
+    
+    f32 factor;
 };
 struct Synth_Input_Track {
     u16 instrument;
     u32 note_count;
-    // [] Synth_Input_Note;
+    u32 pitch_bend_count;
+    // Synth_Input_Note       notes[note_count];
+    // Synth_Input_Pitch_Bend pitch_bends[pitch_bend_count];
 };
 struct Synth_Input_Header {
     u32 version;
@@ -478,6 +486,7 @@ struct Synth_Input_Header {
     u16 track_count;
     // [] Synth_Input_Track;
 };
+#pragma pack(pop)
 
 // Synth1 instrument presets are simple text files; maybe we could read them and translate them to a
 // format we like?
@@ -503,7 +512,12 @@ struct Synth_Instrument {
 // Meshes
 //
 
-struct Serialized_Mesh { // ;Serialized
+#pragma pack(push, 1)
+#define SERIALIZED_EDIT_MESH_VERSION 1
+struct Serialized_Edit_Mesh { // ;Serialized
+    u16 version;
+    
+    v2 center_point;
     v2 offset;
     v2 scale;
     v2 rot;
@@ -515,3 +529,16 @@ struct Serialized_Mesh { // ;Serialized
     // v2 verts[layer_running_vert_total[layer_count-1]];
     // u16 indices[sum(index_count_or_zero(layer_counts))]; where layer_counts is running_total[i] - running_total[i-1]
 };
+#define SERIALIZED_RENDER_MESH_VERSION 1
+struct Serialized_Render_Mesh { // ;Serialized
+    u16 version;
+    u16 vertex_count;
+    
+    v2 default_offset;
+    v2 default_scale;
+    v2 default_rotation;
+    
+    // Render_Vertex verts[vertex_count];
+    // u16 indices[(vertex_count - 2) * 3];
+};
+#pragma pack(pop)

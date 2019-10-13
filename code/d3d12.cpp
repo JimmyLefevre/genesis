@@ -1,7 +1,5 @@
 
 #define BACKBUFFER_COUNT 2
-// @Untested: Should we use DXGI_FORMAT_R8G8B8A8_UNORM_SRGB?
-#define SWAP_CHAIN_FORMAT DXGI_FORMAT_R8G8B8A8_UNORM
 #define SWAP_CHAIN_FLAGS DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT
 #define COMMAND_LIST_TYPE D3D12_COMMAND_LIST_TYPE_DIRECT
 
@@ -188,7 +186,7 @@ color.w * input.instance_color.w);
                         
                         float4 pixel_shader(Vertex_Out input) : SV_Target {
                         float4 out_color = input.color;
-                          return out_color;
+                          return out_color * out_color;
                         }
                         )";
 
@@ -257,20 +255,19 @@ struct Mesh_Upload_Data {
     void *upload_index_buffer_handle;
 };
 
-struct D3D_Frame {
-    
-};
-
 static struct {
     ID3D12Device *device;
     ID3D12CommandQueue *command_queue;
     IDXGISwapChain1 *swap_chain1; // Do we need this?
     IDXGISwapChain3 *swap_chain3;
     ID3D12DescriptorHeap *rtv_heap;
+    ID3D12DescriptorHeap *dsv_heap;
     
     s32 current_backbuffer;
-    ID3D12Resource *backbuffers[BACKBUFFER_COUNT];
-    D3D12_CPU_DESCRIPTOR_HANDLE backbuffer_descriptors[BACKBUFFER_COUNT];
+    ID3D12Resource *backbuffers                         [BACKBUFFER_COUNT];
+    D3D12_CPU_DESCRIPTOR_HANDLE backbuffer_descriptors  [BACKBUFFER_COUNT];
+    ID3D12Resource *depth_buffers                       [BACKBUFFER_COUNT];
+    D3D12_CPU_DESCRIPTOR_HANDLE depth_buffer_descriptors[BACKBUFFER_COUNT];
     
     ID3D12RootSignature *root_signature;
     ID3D12PipelineState *pipeline_state;
@@ -297,74 +294,14 @@ static struct {
     
     s32 editable_mesh_count;
     Editable_Mesh editable_meshes[MAX_EDITABLE_MESH_COUNT];
+    
+    v2s new_backbuffer_dim;
+    bool backbuffers_need_to_be_resized;
 } d3d;
 
 //
 // 
 //
-
-static inline Stored_Command_List *get_command_list(u16 handle) {
-    ASSERT(handle < MAX_COMMAND_LIST_COUNT);
-    return &d3d.command_lists[handle];
-}
-static inline Mutable_Vertex_Buffer *get_vertex_buffer(u16 handle) {
-    ASSERT(handle < MAX_VERTEX_BUFFER_COUNT);
-    return &d3d.mutable_vertex_buffers[handle];
-}
-static inline Mesh *get_mesh(u16 handle) {
-    ASSERT(handle < MAX_MESH_COUNT);
-    return &d3d.meshes[handle];
-}
-static inline Editable_Mesh *get_editable_mesh(u16 handle) {
-    ASSERT(handle < MAX_EDITABLE_MESH_COUNT);
-    return &d3d.editable_meshes[handle];
-}
-
-static inline void d3d_set_fullscreen(bool fullscreen) {
-    d3d.swap_chain1->SetFullscreenState(fullscreen, 0);
-}
-
-static void query_backbuffers(ID3D12Resource** backbuffers, D3D12_CPU_DESCRIPTOR_HANDLE* descriptors) {
-    u32 rtv_descriptor_size = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-    
-    FORI_TYPED(s32, 0, BACKBUFFER_COUNT) {
-        D3D12_CPU_DESCRIPTOR_HANDLE cpu_descriptor = d3d.rtv_heap->GetCPUDescriptorHandleForHeapStart();
-        cpu_descriptor.ptr += i * rtv_descriptor_size;
-        
-        ID3D12Resource *backbuffer = 0;
-        d3d.swap_chain3->GetBuffer(i, IID_PPV_ARGS(&backbuffer));
-        d3d.device->CreateRenderTargetView(backbuffer, 0, cpu_descriptor);
-        
-        backbuffers[i] = backbuffer;
-        descriptors[i] = cpu_descriptor;
-    }
-}
-
-static void print_error_from_blob_and_exit(ID3DBlob *blob) {
-    char *error_message = CAST(char*, blob->GetBufferPointer());
-    ssize error_length  = blob->GetBufferSize();
-    
-    OutputDebugStringA("\n////////////////////////////////////////////\n");
-    OutputDebugStringA(error_message);
-    OutputDebugStringA("\n////////////////////////////////////////////\n");
-    ExitProcess(0);
-}
-
-static ID3DBlob *compile_shader(D3DCompile_t* compile_func, string code, char *entry_point, char *standard) {
-    const u32 flags = D3DCOMPILE_DEBUG | D3DCOMPILE_ENABLE_STRICTNESS | 
-        D3DCOMPILE_OPTIMIZATION_LEVEL0 | D3DCOMPILE_WARNINGS_ARE_ERRORS;
-    
-    ID3DBlob* result     = 0;
-    ID3DBlob* error_blob = 0;
-    u32 error = compile_func(code.data, code.length, 0, 0, 0, entry_point, standard, 
-                             flags, 0, &result, &error_blob);
-    
-    if(error != S_OK) {
-        print_error_from_blob_and_exit(error_blob);
-    }
-    
-    return result;
-}
 
 static inline D3D12_RESOURCE_DESC make_buffer_desc(usize buffer_length) {
     D3D12_RESOURCE_DESC result = {};
@@ -390,6 +327,121 @@ static inline D3D12_HEAP_PROPERTIES make_heap_properties(D3D12_HEAP_TYPE type) {
     result.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
     result.CreationNodeMask     = 1;
     result.VisibleNodeMask      = 1;
+    
+    return result;
+}
+
+// @Speed
+// If API overhead ever ends up becoming an issue, we could make command list handles be straight pointers
+// to the command lists here.
+static inline Stored_Command_List *get_command_list(u16 handle) {
+    ASSERT(handle < MAX_COMMAND_LIST_COUNT);
+    return &d3d.command_lists[handle];
+}
+static inline Mutable_Vertex_Buffer *get_vertex_buffer(u16 handle) {
+    ASSERT(handle < MAX_VERTEX_BUFFER_COUNT);
+    return &d3d.mutable_vertex_buffers[handle];
+}
+static inline Mesh *get_mesh(u16 handle) {
+    ASSERT(handle < MAX_MESH_COUNT);
+    return &d3d.meshes[handle];
+}
+static inline Editable_Mesh *get_editable_mesh(u16 handle) {
+    ASSERT(handle < MAX_EDITABLE_MESH_COUNT);
+    return &d3d.editable_meshes[handle];
+}
+
+static inline void d3d_set_fullscreen(bool fullscreen) {
+    d3d.swap_chain1->SetFullscreenState(fullscreen, 0);
+}
+
+static void query_backbuffers() {
+    u32 rtv_descriptor_size = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    
+    D3D12_RENDER_TARGET_VIEW_DESC rtv_desc = {};
+    rtv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    rtv_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    
+    FORI_TYPED(s32, 0, BACKBUFFER_COUNT) {
+        ID3D12Resource *backbuffer = 0;
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv_cpu_descriptor = d3d.rtv_heap->GetCPUDescriptorHandleForHeapStart();
+        rtv_cpu_descriptor.ptr += i * rtv_descriptor_size;
+        
+        d3d.swap_chain3->GetBuffer(i, IID_PPV_ARGS(&backbuffer));
+        d3d.device->CreateRenderTargetView(backbuffer, &rtv_desc, rtv_cpu_descriptor);
+        
+        d3d.backbuffers[i] = backbuffer;
+        d3d.backbuffer_descriptors[i] = rtv_cpu_descriptor;
+    }
+}
+
+static void generate_depth_buffers() {
+    u32 descriptor_size = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+    
+    {
+        D3D12_RESOURCE_DESC rtv_desc = d3d.backbuffers[0]->GetDesc();
+        
+        D3D12_RESOURCE_DESC desc = {};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = rtv_desc.Width;
+        desc.Height = rtv_desc.Height;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_R32_TYPELESS;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+        
+        D3D12_HEAP_PROPERTIES heap_properties = make_heap_properties(D3D12_HEAP_TYPE_DEFAULT);
+        
+        D3D12_CLEAR_VALUE clear = {};
+        clear.Format = DXGI_FORMAT_D32_FLOAT;
+        clear.DepthStencil.Depth = 1.0f;
+        
+        FORI(0, BACKBUFFER_COUNT) {
+            d3d.device->CreateCommittedResource(&heap_properties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(&d3d.depth_buffers[i]));
+        }
+    }
+    
+    {
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
+        dsv_desc.Format = DXGI_FORMAT_D32_FLOAT; // We aren't using the stencil buffer.
+        dsv_desc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        dsv_desc.Flags = D3D12_DSV_FLAG_READ_ONLY_DEPTH;
+        
+        FORI(0, BACKBUFFER_COUNT) {
+            D3D12_CPU_DESCRIPTOR_HANDLE cpu_descriptor = d3d.dsv_heap->GetCPUDescriptorHandleForHeapStart();
+            cpu_descriptor.ptr += i * descriptor_size;
+            
+            d3d.device->CreateDepthStencilView(d3d.depth_buffers[i], &dsv_desc, cpu_descriptor);
+            
+            d3d.depth_buffer_descriptors[i] = cpu_descriptor;
+        }
+    }
+}
+
+static void print_error_from_blob_and_exit(ID3DBlob *blob) {
+    char *error_message = CAST(char*, blob->GetBufferPointer());
+    ssize error_length  = blob->GetBufferSize();
+    
+    OutputDebugStringA("\n////////////////////////////////////////////\n");
+    OutputDebugStringA(error_message);
+    OutputDebugStringA("\n////////////////////////////////////////////\n");
+    ExitProcess(0);
+}
+
+static ID3DBlob *compile_shader(D3DCompile_t* compile_func, string code, char *entry_point, char *standard) {
+    const u32 flags = D3DCOMPILE_DEBUG | D3DCOMPILE_ENABLE_STRICTNESS | 
+        D3DCOMPILE_OPTIMIZATION_LEVEL0 | D3DCOMPILE_WARNINGS_ARE_ERRORS;
+    
+    ID3DBlob* result     = 0;
+    ID3DBlob* error_blob = 0;
+    u32 error = compile_func(code.data, code.length, 0, 0, 0, entry_point, standard, 
+                             flags, 0, &result, &error_blob);
+    
+    if(error != S_OK) {
+        print_error_from_blob_and_exit(error_blob);
+    }
     
     return result;
 }
@@ -630,13 +682,8 @@ static void upload_texture_to_gpu_rgba8(ID3D12Device* device, ID3D12GraphicsComm
 }
 
 static void d3d_resize_backbuffers(v2s dim) {
-    FORI(0, BACKBUFFER_COUNT) {
-        d3d.backbuffers[i]->Release();
-    }
-    
-    d3d.swap_chain1->ResizeBuffers(2, dim.x, dim.y, DXGI_FORMAT_UNKNOWN, SWAP_CHAIN_FLAGS);
-    
-    query_backbuffers(d3d.backbuffers, d3d.backbuffer_descriptors);
+    d3d.backbuffers_need_to_be_resized = true;
+    d3d.new_backbuffer_dim = dim;
 }
 
 #if 0 // :RemoveTextures
@@ -828,29 +875,45 @@ GPU_SUBMIT_COMMANDS(submit_commands) {
 }
 
 static void begin_frame_and_clear(u16 list_handle, u16 frame_index, v4 clear_color) {
-    // @Cleanup?
-    // We're both waiting for a backbuffer to be available (FrameLatencyWaitableObject) and for 
-    // the next buffer's commands to be done executing. This is probably redundant?
-    WaitForSingleObject(d3d.swap_chain3->GetFrameLatencyWaitableObject(), INFINITE);
-    // This is @Hardcoded for double buffering too; do we care?
-    d3d.command_queue->Signal(d3d.frame_completion_fence, d3d.frame_completion_fence_value);
-    
     if(d3d.changed_pipeline_state_desc) {
         d3d.device->CreateGraphicsPipelineState(&d3d.pipeline_state_desc, IID_PPV_ARGS(&d3d.pipeline_state));
         d3d.changed_pipeline_state_desc = false;
     }
     
-    d3d.current_backbuffer = d3d.swap_chain3->GetCurrentBackBufferIndex();
-    
-    if(d3d.frame_completion_fence->GetCompletedValue() < d3d.frame_completion_fence_value - 1) {
-        d3d.frame_completion_fence->SetEventOnCompletion(d3d.frame_completion_fence_value - 1, d3d.frame_completion_event);
-        WaitForSingleObject(d3d.frame_completion_event, INFINITE);
+    { // Waiting for the frame flip. Anything that uses in-flight resources needs to be executed after this.
+        // @Cleanup?
+        // We're both waiting for a backbuffer to be available (FrameLatencyWaitableObject) and for 
+        // the next buffer's commands to be done executing. This is probably redundant?
+        WaitForSingleObject(d3d.swap_chain3->GetFrameLatencyWaitableObject(), INFINITE);
+        // This is @Hardcoded for double buffering too; do we care?
+        d3d.command_queue->Signal(d3d.frame_completion_fence, d3d.frame_completion_fence_value);
+        
+        if(d3d.frame_completion_fence->GetCompletedValue() < d3d.frame_completion_fence_value - 1) {
+            d3d.frame_completion_fence->SetEventOnCompletion(d3d.frame_completion_fence_value - 1, d3d.frame_completion_event);
+            WaitForSingleObject(d3d.frame_completion_event, INFINITE);
+        }
+        d3d.frame_completion_fence_value += 1;
     }
     
-    d3d.frame_completion_fence_value += 1;
+    if(d3d.backbuffers_need_to_be_resized) {
+        FORI(0, BACKBUFFER_COUNT) {
+            d3d.backbuffers[i]->Release();
+            d3d.depth_buffers[i]->Release();
+        }
+        
+        d3d.swap_chain1->ResizeBuffers(2, d3d.new_backbuffer_dim.x, d3d.new_backbuffer_dim.y, DXGI_FORMAT_UNKNOWN, SWAP_CHAIN_FLAGS);
+        
+        query_backbuffers();
+        generate_depth_buffers();
+        
+        d3d.backbuffers_need_to_be_resized = false;
+    }
+    
+    d3d.current_backbuffer = d3d.swap_chain3->GetCurrentBackBufferIndex();
     
     auto backbuffer = d3d.backbuffers[d3d.current_backbuffer];
     auto backbuffer_descriptor = d3d.backbuffer_descriptors[d3d.current_backbuffer];
+    auto depth_buffer_descriptor = d3d.depth_buffer_descriptors[d3d.current_backbuffer];
     
     ID3D12DescriptorHeap *descriptor_heaps[] = {d3d.shader_descriptor_heap};
     auto descriptor_table = d3d.shader_descriptor_heap->GetGPUDescriptorHandleForHeapStart();
@@ -869,251 +932,252 @@ static void begin_frame_and_clear(u16 list_handle, u16 frame_index, v4 clear_col
     scissor_rect.right  = CAST(LONG, backbuffer->GetDesc().Width);
     scissor_rect.bottom = CAST(LONG, backbuffer->GetDesc().Height);
     
-#if 0
-    FORI_TYPED(u16, 0, d3d.command_list_count) {
-#else
-        { u16 i = frame_index & 1; // :OneCommandListPerFrame
-#endif
-            auto _list = get_command_list(i);
-            
-            _list->allocator->Reset();
-            _list->list->Reset(_list->allocator, d3d.pipeline_state);
-            _list->list->SetGraphicsRootSignature(d3d.root_signature);
-            _list->list->SetDescriptorHeaps(ARRAY_LENGTH(descriptor_heaps), descriptor_heaps);
-            _list->list->SetGraphicsRootDescriptorTable(1, descriptor_table);
-            _list->list->RSSetViewports(1, &viewport);
-            _list->list->RSSetScissorRects(1, &scissor_rect);
-            _list->list->OMSetRenderTargets(1, &backbuffer_descriptor, 0, 0);
-        }
+    { u16 i = frame_index & 1; // :OneCommandListPerFrame FORI_TYPED(u16, 0, d3d.command_list_count) {
+        auto _list = get_command_list(i);
         
-        auto list = get_command_list(list_handle)->list;
-        
-        {
-            D3D12_RESOURCE_BARRIER render_barrier = make_transition_barrier(backbuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            list->ResourceBarrier(1, &render_barrier);
-        }
-        
-        list->ClearRenderTargetView(backbuffer_descriptor, clear_color.by_element, 0, 0);
-#if 0
-        list->Close();
-        
-        ID3D12CommandList *lists[] = {list};
-        d3d.command_queue->ExecuteCommandLists(1, lists);
-#endif
+        _list->allocator->Reset();
+        _list->list->Reset(_list->allocator, d3d.pipeline_state);
+        _list->list->SetGraphicsRootSignature(d3d.root_signature);
+        _list->list->SetDescriptorHeaps(ARRAY_LENGTH(descriptor_heaps), descriptor_heaps);
+        _list->list->SetGraphicsRootDescriptorTable(1, descriptor_table);
+        _list->list->RSSetViewports(1, &viewport);
+        _list->list->RSSetScissorRects(1, &scissor_rect);
+        _list->list->OMSetRenderTargets(1, &backbuffer_descriptor, 0, &depth_buffer_descriptor);
     }
     
-    GPU_END_FRAME(end_frame) {
+    auto list = get_command_list(list_handle)->list;
+    
+    {
+        D3D12_RESOURCE_BARRIER render_barrier = make_transition_barrier(backbuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        list->ResourceBarrier(1, &render_barrier);
+    }
+    
+    list->ClearRenderTargetView(backbuffer_descriptor, clear_color.by_element, 0, 0);
+    list->ClearDepthStencilView(depth_buffer_descriptor, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, 0);
+}
+
+GPU_END_FRAME(end_frame) {
 #if 1
-        d3d.swap_chain3->Present(1, 0); // For vsync
+    d3d.swap_chain3->Present(1, 0); // For vsync
 #else
-        d3d.swap_chain3->Present(0, DXGI_PRESENT_ALLOW_TEARING); // For no vsync
+    d3d.swap_chain3->Present(0, DXGI_PRESENT_ALLOW_TEARING); // For no vsync
 #endif
-    }
+}
+
+static void d3d_init(HWND wnd_handle) {
+    u32 factory_flags = 0;
     
-    static void d3d_init(HWND wnd_handle) {
-        u32 factory_flags = 0;
-        
 #if GENESIS_DEV
-        // This has to be done first:
-        ID3D12Debug *debug = 0;
-        D3D12GetDebugInterface(IID_PPV_ARGS(&debug));
-        debug->EnableDebugLayer();
-        factory_flags = DXGI_CREATE_FACTORY_DEBUG;
+    // This has to be done first:
+    ID3D12Debug *debug = 0;
+    D3D12GetDebugInterface(IID_PPV_ARGS(&debug));
+    debug->EnableDebugLayer();
+    factory_flags = DXGI_CREATE_FACTORY_DEBUG;
 #endif
+    
+    D3D12CreateDevice(0, D3D_FEATURE_LEVEL_12_0,  IID_PPV_ARGS(&d3d.device));
+    
+    IDXGIFactory2 *factory = 0; // The MSDN example uses IDXGIFactory4, what's up with that?
+    CreateDXGIFactory2(factory_flags, IID_PPV_ARGS(&factory));
+    
+    {
+        D3D12_COMMAND_QUEUE_DESC desc = {};
+        desc.Type     = COMMAND_LIST_TYPE;
+        desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL; // D3D12_COMMAND_QUEUE_PRIORITY_HIGH;
+        desc.Flags    = D3D12_COMMAND_QUEUE_FLAG_NONE;
         
-        D3D12CreateDevice(0, D3D_FEATURE_LEVEL_12_0,  IID_PPV_ARGS(&d3d.device));
-        
-        IDXGIFactory2 *factory = 0; // The MSDN example uses IDXGIFactory4, what's up with that?
-        CreateDXGIFactory2(factory_flags, IID_PPV_ARGS(&factory));
-        
-        {
-            D3D12_COMMAND_QUEUE_DESC desc = {};
-            desc.Type     = COMMAND_LIST_TYPE;
-            desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL; // D3D12_COMMAND_QUEUE_PRIORITY_HIGH;
-            desc.Flags    = D3D12_COMMAND_QUEUE_FLAG_NONE;
-            
-            d3d.device->CreateCommandQueue(&desc, IID_PPV_ARGS(&d3d.command_queue));
-        }
-        
-        {
-            DXGI_SWAP_CHAIN_DESC1 desc = {};
-            desc.Format           = SWAP_CHAIN_FORMAT;
-            desc.SampleDesc.Count = 1; // No multisampling
-            desc.BufferUsage      = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-            desc.BufferCount      = BACKBUFFER_COUNT;
-            desc.Scaling          = DXGI_SCALING_STRETCH;
-            desc.SwapEffect       = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-            desc.AlphaMode        = DXGI_ALPHA_MODE_IGNORE;
-            desc.Flags            = SWAP_CHAIN_FLAGS; // DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING; For no VSYNC
-            
-            DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen = {};
-            fullscreen.RefreshRate.Numerator   = 60; // @Hardcoded
-            fullscreen.RefreshRate.Denominator = 1;
-            fullscreen.Windowed                = TRUE;
-            // We don't specify Scaling because if we do, we might initiate a mode change
-            // when going to fullscreen.
-            
-            factory->CreateSwapChainForHwnd(d3d.command_queue, wnd_handle, &desc, &fullscreen, 0, &d3d.swap_chain1);
-        }
-        
-        factory->MakeWindowAssociation(wnd_handle, DXGI_MWA_NO_WINDOW_CHANGES);
-        
-        d3d.swap_chain1->QueryInterface(IID_PPV_ARGS(&d3d.swap_chain3));
-        
-        d3d.swap_chain3->SetMaximumFrameLatency(1);
-        
-        ID3D12DescriptorHeap *rtv_heap = 0;
-        {
-            D3D12_DESCRIPTOR_HEAP_DESC desc = {};
-            
-            desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-            desc.NumDescriptors = BACKBUFFER_COUNT;
-            desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-            
-            d3d.device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&d3d.rtv_heap));
-        }
-        
-        query_backbuffers(d3d.backbuffers, d3d.backbuffer_descriptors);
-        
-        {
-            D3D12_STATIC_SAMPLER_DESC static_sampler = {};
-            static_sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-            static_sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-            static_sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-            static_sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-            static_sampler.ComparisonFunc   = D3D12_COMPARISON_FUNC_NEVER;
-            static_sampler.ShaderRegister   = 0;
-            static_sampler.RegisterSpace    = 0;
-            static_sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-            
-            D3D12_DESCRIPTOR_RANGE pixel_shader_descriptor_ranges[1] = {};
-            {
-                auto range = &pixel_shader_descriptor_ranges[0];
-                
-                range->RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-                range->NumDescriptors                    = 1;
-                range->BaseShaderRegister                = 0;
-                range->RegisterSpace                     = 0;
-                range->OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-            }
-            
-            
-            D3D12_ROOT_PARAMETER root_params[2] = {};
-            // Transform
-            root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-            root_params[0].Constants.ShaderRegister = 0;
-            root_params[0].Constants.Num32BitValues = 16;
-            root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
-            
-            // Texture
-            root_params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-            root_params[1].DescriptorTable.pDescriptorRanges   = pixel_shader_descriptor_ranges;
-            root_params[1].DescriptorTable.NumDescriptorRanges = ARRAY_LENGTH(pixel_shader_descriptor_ranges);
-            root_params[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
-            
-            D3D12_ROOT_SIGNATURE_DESC desc = {};
-            desc.NumParameters     = ARRAY_LENGTH(root_params);
-            desc.pParameters       = root_params;
-            desc.NumStaticSamplers = 1;
-            desc.pStaticSamplers   = &static_sampler;
-            desc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
-            ID3DBlob *signature    = 0;
-            ID3DBlob *_errors      = 0;
-            
-            D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1_0, &signature, &_errors);
-            
-            if(_errors) {
-                print_error_from_blob_and_exit(_errors);
-            }
-            
-            d3d.device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&d3d.root_signature));
-        }
-        
-        HMODULE d3d_lib = LoadLibraryW(L"D3dcompiler_47.dll");
-        
-        if(d3d_lib) {
-            D3DCompile_t *compile_func = (D3DCompile_t *)GetProcAddress(d3d_lib, "D3DCompile");
-            
-            string code = make_string(CAST(u8*, new_shader), cstring_length(new_shader));
-            
-            d3d.shaders[Shader_ID::STANDARD_VERTEX] = compile_shader(compile_func, code, "vertex_shader", "vs_5_0");
-            d3d.shaders[Shader_ID::STANDARD_PIXEL]  = compile_shader(compile_func, code,  "pixel_shader", "ps_5_0");
-        }
-        
-        {
-            D3D12_INPUT_ELEMENT_DESC input_elements[] = {
-                {"VERTEX_POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, D3D12_INPUT_SLOTS::PER_VERTEX, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-                {"VERTEX_COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_INPUT_SLOTS::PER_VERTEX, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-                {"INSTANCE_OFFSET", 0, DXGI_FORMAT_R32G32_FLOAT, D3D12_INPUT_SLOTS::PER_INSTANCE, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1},
-                {"INSTANCE_SCALE", 0, DXGI_FORMAT_R32G32_FLOAT, D3D12_INPUT_SLOTS::PER_INSTANCE, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1},
-                {"INSTANCE_ROTATION", 0, DXGI_FORMAT_R32G32_FLOAT, D3D12_INPUT_SLOTS::PER_INSTANCE, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1},
-                {"INSTANCE_COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_INPUT_SLOTS::PER_INSTANCE, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1},
-            };
-            
-            D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
-            desc.pRootSignature     = d3d.root_signature;
-            desc.VS.pShaderBytecode = d3d.shaders[Shader_ID::STANDARD_VERTEX]->GetBufferPointer();
-            desc.VS.BytecodeLength  = d3d.shaders[Shader_ID::STANDARD_VERTEX]->GetBufferSize();
-            desc.PS.pShaderBytecode = d3d.shaders[Shader_ID::STANDARD_PIXEL]->GetBufferPointer();
-            desc.PS.BytecodeLength  = d3d.shaders[Shader_ID::STANDARD_PIXEL]->GetBufferSize();
-            FORI(0, ARRAY_LENGTH(desc.BlendState.RenderTarget)) {
-                auto render_target = &desc.BlendState.RenderTarget[i];
-                render_target->RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-            }
-            desc.SampleMask = 0xFFFFFFFF;
-            desc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-            desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-            desc.RasterizerState.FrontCounterClockwise = TRUE;
-            desc.RasterizerState.DepthClipEnable = FALSE; // If we ever get a depth buffer, we should enable this to ensure proper Z-ordering.
-            // desc.DepthStencilState.DepthEnable = TRUE;
-            desc.InputLayout.pInputElementDescs = input_elements;
-            desc.InputLayout.NumElements = ARRAY_LENGTH(input_elements);
-            desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-            desc.NumRenderTargets = 1;
-            desc.RTVFormats[0] = SWAP_CHAIN_FORMAT;
-            desc.DSVFormat = DXGI_FORMAT_D24_UNORM_S8_UINT; // Probably not useful
-            desc.SampleDesc.Count = 1;
-            desc.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
-            
-            d3d.pipeline_state_desc = desc;
-            d3d.device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&d3d.pipeline_state));
-        }
-        
-        
-        { // @Duplication
-            D3D12_DESCRIPTOR_HEAP_DESC desc = {};
-            
-            desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-            desc.NumDescriptors = 3;
-            desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-            
-            d3d.device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&d3d.shader_descriptor_heap));
-        }
-        
-        d3d.frame_completion_fence_value = 1;
-        d3d.frame_completion_event = CreateEventW(0, 0, FALSE, 0);
-        d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.frame_completion_fence));
+        d3d.device->CreateCommandQueue(&desc, IID_PPV_ARGS(&d3d.command_queue));
     }
     
-    static void draw_mesh_instances(u16 list_handle, u16 instance_buffer_handle, Draw_Command *commands, s32 command_count) {
-        auto command_list = get_command_list(list_handle)->list;
-        auto instance_buffer = get_vertex_buffer(instance_buffer_handle);
-        auto instance_buffer_view = &instance_buffer->actual.view;
+    {
+        DXGI_SWAP_CHAIN_DESC1 desc = {};
+        desc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1; // No multisampling
+        desc.BufferUsage      = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        desc.BufferCount      = BACKBUFFER_COUNT;
+        desc.Scaling          = DXGI_SCALING_STRETCH;
+        desc.SwapEffect       = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        desc.AlphaMode        = DXGI_ALPHA_MODE_IGNORE;
+        desc.Flags            = SWAP_CHAIN_FLAGS; // DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING; For no VSYNC
         
-        update_vertex_buffer(command_list, instance_buffer);
-        s32 running_instance_count = 0;
+        DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen = {};
+        fullscreen.RefreshRate.Numerator   = 60; // @Hardcoded
+        fullscreen.RefreshRate.Denominator = 1;
+        fullscreen.Windowed                = TRUE;
+        // We don't specify Scaling because if we do, we might initiate a mode change
+        // when going to fullscreen(?).
         
-        FORI(0, command_count) {
-            auto command = &commands[i];
-            auto mesh = get_mesh(command->mesh_handle);
-            
-            command_list->IASetVertexBuffers(D3D12_INPUT_SLOTS::PER_VERTEX, 1, &mesh->vertex_buffer_view);
-            command_list->IASetVertexBuffers(D3D12_INPUT_SLOTS::PER_INSTANCE, 1, instance_buffer_view);
-            command_list->IASetIndexBuffer(&mesh->index_buffer_view);
-            command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            
-            command_list->DrawIndexedInstanced(mesh->index_count, command->instance_count, 0, 0, running_instance_count);
-            running_instance_count += command->instance_count;
-        }
+        factory->CreateSwapChainForHwnd(d3d.command_queue, wnd_handle, &desc, &fullscreen, 0, &d3d.swap_chain1);
     }
     
+    factory->MakeWindowAssociation(wnd_handle, DXGI_MWA_NO_WINDOW_CHANGES);
+    
+    d3d.swap_chain1->QueryInterface(IID_PPV_ARGS(&d3d.swap_chain3));
+    
+    d3d.swap_chain3->SetMaximumFrameLatency(1);
+    
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+        
+        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        desc.NumDescriptors = BACKBUFFER_COUNT;
+        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        
+        d3d.device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&d3d.rtv_heap));
+        
+        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+        d3d.device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&d3d.dsv_heap));
+    }
+    
+    query_backbuffers();
+    generate_depth_buffers();
+    
+    {
+        D3D12_STATIC_SAMPLER_DESC static_sampler = {};
+        static_sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        static_sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        static_sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        static_sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        static_sampler.ComparisonFunc   = D3D12_COMPARISON_FUNC_NEVER;
+        static_sampler.ShaderRegister   = 0;
+        static_sampler.RegisterSpace    = 0;
+        static_sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        
+        D3D12_DESCRIPTOR_RANGE pixel_shader_descriptor_ranges[1] = {};
+        {
+            auto range = &pixel_shader_descriptor_ranges[0];
+            
+            range->RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+            range->NumDescriptors                    = 1;
+            range->BaseShaderRegister                = 0;
+            range->RegisterSpace                     = 0;
+            range->OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+        }
+        
+        
+        D3D12_ROOT_PARAMETER root_params[2] = {};
+        // Transform
+        root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        root_params[0].Constants.ShaderRegister = 0;
+        root_params[0].Constants.Num32BitValues = 16;
+        root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+        
+        // Texture
+        root_params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        root_params[1].DescriptorTable.pDescriptorRanges   = pixel_shader_descriptor_ranges;
+        root_params[1].DescriptorTable.NumDescriptorRanges = ARRAY_LENGTH(pixel_shader_descriptor_ranges);
+        root_params[1].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_PIXEL;
+        
+        D3D12_ROOT_SIGNATURE_DESC desc = {};
+        desc.NumParameters     = ARRAY_LENGTH(root_params);
+        desc.pParameters       = root_params;
+        desc.NumStaticSamplers = 1;
+        desc.pStaticSamplers   = &static_sampler;
+        desc.Flags             = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+        ID3DBlob *signature    = 0;
+        ID3DBlob *_errors      = 0;
+        
+        D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1_0, &signature, &_errors);
+        
+        if(_errors) {
+            print_error_from_blob_and_exit(_errors);
+        }
+        
+        d3d.device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&d3d.root_signature));
+    }
+    
+    HMODULE d3d_lib = LoadLibraryW(L"D3dcompiler_47.dll");
+    
+    if(d3d_lib) {
+        D3DCompile_t *compile_func = (D3DCompile_t *)GetProcAddress(d3d_lib, "D3DCompile");
+        
+        string code = make_string(CAST(u8*, new_shader), cstring_length(new_shader));
+        
+        d3d.shaders[Shader_ID::STANDARD_VERTEX] = compile_shader(compile_func, code, "vertex_shader", "vs_5_0");
+        d3d.shaders[Shader_ID::STANDARD_PIXEL]  = compile_shader(compile_func, code,  "pixel_shader", "ps_5_0");
+    }
+    
+    {
+        D3D12_INPUT_ELEMENT_DESC input_elements[] = {
+            {"VERTEX_POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, D3D12_INPUT_SLOTS::PER_VERTEX, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"VERTEX_COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_INPUT_SLOTS::PER_VERTEX, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"INSTANCE_OFFSET", 0, DXGI_FORMAT_R32G32_FLOAT, D3D12_INPUT_SLOTS::PER_INSTANCE, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1},
+            {"INSTANCE_SCALE", 0, DXGI_FORMAT_R32G32_FLOAT, D3D12_INPUT_SLOTS::PER_INSTANCE, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1},
+            {"INSTANCE_ROTATION", 0, DXGI_FORMAT_R32G32_FLOAT, D3D12_INPUT_SLOTS::PER_INSTANCE, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1},
+            {"INSTANCE_COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_INPUT_SLOTS::PER_INSTANCE, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1},
+        };
+        
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
+        desc.pRootSignature     = d3d.root_signature;
+        desc.VS.pShaderBytecode = d3d.shaders[Shader_ID::STANDARD_VERTEX]->GetBufferPointer();
+        desc.VS.BytecodeLength  = d3d.shaders[Shader_ID::STANDARD_VERTEX]->GetBufferSize();
+        desc.PS.pShaderBytecode = d3d.shaders[Shader_ID::STANDARD_PIXEL]->GetBufferPointer();
+        desc.PS.BytecodeLength  = d3d.shaders[Shader_ID::STANDARD_PIXEL]->GetBufferSize();
+        FORI(0, ARRAY_LENGTH(desc.BlendState.RenderTarget)) {
+            auto render_target = &desc.BlendState.RenderTarget[i];
+            render_target->RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        }
+        desc.SampleMask = 0xFFFFFFFF;
+        desc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        desc.RasterizerState.FrontCounterClockwise = TRUE;
+        desc.RasterizerState.DepthClipEnable = FALSE; // We're not using near and far clip planes.
+        
+        desc.DepthStencilState.DepthEnable = TRUE;
+        desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+        desc.DepthStencilState.StencilEnable = FALSE;
+        
+        desc.InputLayout.pInputElementDescs = input_elements;
+        desc.InputLayout.NumElements = ARRAY_LENGTH(input_elements);
+        
+        desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        
+        desc.NumRenderTargets = 1;
+        desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+        desc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+        
+        desc.SampleDesc.Count = 1;
+        desc.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
+        
+        d3d.pipeline_state_desc = desc;
+        d3d.device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&d3d.pipeline_state));
+    }
+    
+    
+    { // @Duplication
+        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+        
+        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        desc.NumDescriptors = 3;
+        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        
+        d3d.device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&d3d.shader_descriptor_heap));
+    }
+    
+    d3d.frame_completion_fence_value = 1;
+    d3d.frame_completion_event = CreateEventW(0, 0, FALSE, 0);
+    d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.frame_completion_fence));
+}
+
+static void draw_mesh_instances(u16 list_handle, u16 instance_buffer_handle, Draw_Command *commands, s32 command_count) {
+    auto command_list = get_command_list(list_handle)->list;
+    auto instance_buffer = get_vertex_buffer(instance_buffer_handle);
+    auto instance_buffer_view = &instance_buffer->actual.view;
+    
+    update_vertex_buffer(command_list, instance_buffer);
+    s32 running_instance_count = 0;
+    
+    FORI(0, command_count) {
+        auto command = &commands[i];
+        auto mesh = get_mesh(command->mesh_handle);
+        
+        command_list->IASetVertexBuffers(D3D12_INPUT_SLOTS::PER_VERTEX, 1, &mesh->vertex_buffer_view);
+        command_list->IASetVertexBuffers(D3D12_INPUT_SLOTS::PER_INSTANCE, 1, instance_buffer_view);
+        command_list->IASetIndexBuffer(&mesh->index_buffer_view);
+        command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        
+        command_list->DrawIndexedInstanced(mesh->index_count, command->instance_count, 0, 0, running_instance_count);
+        running_instance_count += command->instance_count;
+    }
+}

@@ -1,6 +1,9 @@
 
+#define SYNTH_HZ 128
 #define MAX_OSCILLATORS_PER_INSTRUMENT  2
 #define MAX_INSTRUMENT_COUNT           16
+#define MAX_POLYPHONY 16
+#define MAX_TRACK_COUNT 256 // @Hardcoded
 
 ENUM(SYNTH_WAVEFORM) {
     SAWTOOTH = 1,
@@ -13,17 +16,6 @@ struct Oscillator_SOA {
     u8 count;
     u8 waveforms[MAX_OSCILLATORS_PER_INSTRUMENT];
     f32 mix[MAX_OSCILLATORS_PER_INSTRUMENT];
-};
-
-struct Synth_Input_Instrument {
-    Oscillator_SOA oscillators;
-    
-    f32 attack;
-    f32 decay;
-    f32 sustain_factor;
-    f32 release;
-    
-    f32 amplitude;
 };
 
 struct Synth_Instrument {
@@ -43,7 +35,7 @@ struct Synth_Note {
     s32 start_sample;
     s32 end_sample;
     f32 wavelength;
-    f32 velocity; // @Incomplete: Convert to amplitude?
+    f32 velocity;
 };
 
 struct Oscillator_State {
@@ -58,8 +50,8 @@ struct Oscillator_State {
         } pulse;
         
         struct {
-            bool descending;
             f32 phase;       // -1.0f to 1.0f
+            bool descending;
         } triangle;
         
         struct {
@@ -77,11 +69,20 @@ struct Synth_Note_State {
     Oscillator_State oscillators[MAX_OSCILLATORS_PER_INSTRUMENT];
 };
 
-#define MAX_POLYPHONY 16
+struct Synth_Pitch_Bend {
+    f32 factor;
+    
+    s32 center_sample;
+    s32 radius;
+    
+    s32 note_count;
+};
 
 struct Synth_Track {
     Synth_Note *notes;
+    Synth_Pitch_Bend *pitch_bends;
     s32 note_count;
+    s32 pitch_bend_count;
     s32 samples_played;
     s32 next_note_to_play;
     s16 instrument;
@@ -90,8 +91,6 @@ struct Synth_Track {
     Synth_Note_State current_notes[MAX_POLYPHONY];
 };
 
-// @Hardcoded
-#define MAX_TRACK_COUNT 256
 
 struct Synth {
     u8  core_count;

@@ -628,7 +628,11 @@ s32 WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                       loaded_dll_full_path, MAX_PATH);
     
     {
+#if USE_DATAPACK
         s32 success = SetCurrentDirectoryW(CAST(LPWSTR, exe_directory));
+#else
+        s32 success = SetCurrentDirectoryW(L"W:\\genesis\\assets\\");
+#endif
         ASSERT(success);
     }
     

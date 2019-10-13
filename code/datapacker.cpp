@@ -17,15 +17,22 @@
 #include "assets.h"
 #include "audio.h"
 #include "synth.h"
+#include "mesh.h"
 #include "game.h"
 #include "bmp.h"
 #include "utilities.h"
 #include "compression_fast.h"
 #include "sse.h"
 
+struct Render_Vertex {
+    v2 p;
+    v4 color;
+};
+
 #include "print.cpp"
 #include "string.cpp"
 #include "compression_fast.cpp"
+#include "mesh.cpp"
 
 ENUM(SYNTH1) {
     OSC1_WAVEFORM = 0,
@@ -907,6 +914,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             }
         }
         
+#if 0
         { // Synth1 config files -> Synth_Instrument
             SCOPE_MEMORY(&memory);
             string sy1_filename = STRING("instruments/001.sy");
@@ -1000,11 +1008,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
             
             {
                 s32 attack = extracted_values[AMP_ATTACK];
-                f32 attack_f = CAST(f32, attack / ???);
                 instrument.attack = attack_f;
             }
             
         }
+#endif
         
 #if 0
         // Compression benchmark.

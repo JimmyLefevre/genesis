@@ -22,12 +22,11 @@ extern "C" {
 #include            "profile.h"
 #include                "bmp.h"
 #include              "input.h"
-#include               "font.h"
+#include               "font.h" // @Cleanup
 #include             "assets.h"
-#include              "audio.h"
+#include              "audio.h" // @Cleanup
 #include              "synth.h"
 #include   "compression_fast.h"
-// #include               "menu.h"
 #include         "render_new.h"
 #include               "mesh.h"
 #include               "game.h"
@@ -43,14 +42,12 @@ static Log *global_log;
 #include              "log.cpp"
 #include              "bmp.cpp"
 #include            "input.cpp"
-// #include             "font.cpp"
 #include       "render_new.cpp"
 #include             "mesh.cpp"
 #include           "assets.cpp"
-#include            "audio.cpp"
+#include            "audio.cpp" // @Cleanup
 #include            "synth.cpp"
 #include "compression_fast.cpp"
-// #include             "menu.cpp"
 // #include          "profile.cpp"
 
 static inline v2 unit_scale_to_world_space_offset(v2 p, f32 camera_zoom) {
@@ -441,39 +438,7 @@ static v2 closest_in_array_with_direction(v2 from, v2 *array, s32 count, f32 *ou
     return result;
 }
 
-#if 0
-struct Game_Level {
-    s32 index;
-    
-    v2 map_halfdim;
-    // Some list of associated assets.
-    
-    Any_Entity_Array entities[];
-    // ie.
-    s16 entity_type;
-    s16 entity_count;
-    // with type-specific fields right after this; SOA format?
-    // Entities can/should be serialised, ie.
-    
-    struct {
-        s32   count;
-        // v2    camera_ps        [     MAX_PLAYER_COUNT];
-        // f32   camera_zooms     [     MAX_PLAYER_COUNT];
-        // v2    dps              [     MAX_PLAYER_COUNT];
-        v2    ps               [     MAX_PLAYER_COUNT];
-        // v2    xhair_offsets    [     MAX_PLAYER_COUNT];
-        s32   partner_counts   [     MAX_PLAYER_COUNT];
-        s32   partners         [     MAX_PLAYER_COUNT][MAX_PARTNERS_PER_PLAYER];
-    } players;
-};
-#endif
-
-static usize layout_serialised_level_data(Serialised_Level_Data *level, Level_Header *header) {
-    return 0;
-}
-
-void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
-                                     Audio_Info *audio, Datapack_Handle *datapack) {
+void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_Info *audio, Datapack_Handle *datapack) {
     TIME_BLOCK;
     const f32 dt32 = (f32)dt;
     Input in = *_in;
@@ -488,7 +453,7 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
 #endif
     
     if((g->lost || !g->current_level_index) && datapack) {
-#if 0
+#if 1
         u32 new_level_index = 1;
         bool fresh_level = g->current_level_index != new_level_index;
         
@@ -521,20 +486,20 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
         g->dogs.count = 1;
         g->dogs.ps[0] = V2(2.0f);
         
-#if 1
+#if 0
         g->wall_turrets.count = 1;
         g->wall_turrets.ps[0] = V2(-1.0f);
 #endif
         
         g->map_halfdim = V2(TEST_MAP_WIDTH / 2.0f, TEST_MAP_HEIGHT / 2.0f);
         
+        g->current_level_index = new_level_index;
         
         // Associated assets:
         // We only do this when loading a new level, not when resetting the current one.
         // :AudioInVisualState @Cleanup
         if(fresh_level && datapack) {
-            // @Incomplete: Clear all sounds?
-            LOAD_SOUND(audio, datapack, erase);
+            // Load necessary assets
         }
 #else
         s32 desired_level = 1; //g->desired_level_index;
@@ -544,8 +509,7 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
         
         g->camera_zoom = 1.0f;
         
-        // @Incomplete: get_level(&temporary_memory, datapack, desired_level)
-        string asset = read_entire_asset(&temporary_memory, datapack, ASSET_UID_1_lvl);
+        string asset = READ_ENTIRE_ASSET(&temporary_memory, datapack, 1, lvl);
         Serialised_Level_Data serialised;
         
         serialised.header = (Level_Header *)asset.data;
@@ -604,7 +568,6 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
             }
             g->targets.count = count;
         }
-        
 #endif
     }
     
@@ -1097,79 +1060,7 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt,
     advance_input(_in);
 }
 
-THREAD_JOB_PROC(draw_game_threaded) {
-#if 0 // @XXX
-    // Begin
-    auto payload = CAST(Draw_Game_Threaded_Payload*, data);
-    auto render  = CAST(Render_Thread_Payload*, &payload->render);
-    
-    auto renderer = payload->renderer;
-    
-    s32 render_threads = renderer->core_count;
-    
-    s32 batch_index = 0;
-    Command_Batch* current_batch = &render->command_batches[batch_index];
-    Render_Vertex* vertex_buffer = CAST(Render_Vertex*, current_batch->list->vertex_buffer_memory);
-    s32 vert_count = 0;
-    s32 tri_count = 0;
-    
-    bool done = false;
-    while(!done) {
-        // Do some stuff
-#if 0
-        vertex_buffer[vert_count++] = make_render_vertex(V2(0.0f, 0.7f));
-        vertex_buffer[vert_count++] = make_render_vertex(V2(-0.4f, -0.5f));
-        vertex_buffer[vert_count++] = make_render_vertex(V2( 0.4f, -0.5f));
-#endif
-        
-        done = true;
-        
-        if((vert_count == 3) || done) {
-            // Queue up the batch.
-            s32 queued = ATOMIC_INC32(CAST(volatile long*, &renderer->command_batches_queued));
-            if(!(queued % render_threads)) { 
-                // Flush.
-                // This also increases some batch_index waitable value.
-                
-                // @Hardcoded
-                os_platform.submit_commands(current_batch->list, &vert_count, 1, false);
-                renderer->command_flushes += 1;
-            }
-            
-            if(!done) {
-                // In any case, flip our current batch.
-                batch_index += 1;
-                current_batch = &render->command_batches[batch_index & 1];
-                vertex_buffer = CAST(Render_Vertex*, current_batch->list->vertex_buffer_memory);
-                vert_count = 0;
-                
-                // We also need to wait for it to be free again, just in case we finish 2 batches
-                // before some other thread gets to finish 1.
-                
-                // This is an example of doing this:
-                // os_platform->wait_for_submitted_batches_to_be_this_value(batch_index - 1);
-                // ... Where we would be waiting on an event.
-                
-                // This is another, admittedly dumb, way of doing this:
-                // while(renderer->command_flushes < batch_index - 1) {
-                //   ;
-                // }
-                // HOWEVER, events and waits are pretty heavyweight and probably slow, so they should
-                // only be used in a hypothetical worst case scenario.
-                // 
-                // A smarter way of going about this, then, is probably to do this:
-                // if(renderer->command_flushes < batch_index - 1) {
-                //   os_platform->wait_for_submitted_batches_to_be_this_value(batch_index - 1);
-                // }
-                // Where, hopefully, in 99.9% of cases, we just jump over the event mess.
-            }
-        }
-    }
-#endif
-}
-
-void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Game *g, Asset_Storage *assets) {
-#if 0
+void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Command_Queue *command_queue, Game *g, Asset_Storage *assets) {
     TIME_BLOCK;
     if(g->current_level_index) {
         const u32 focused_player = g->current_player;
@@ -1184,91 +1075,109 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Game *g, As
         const v4 anti_partner_color = V4(0.0f, 0.0f, 1.0f, 1.0f);
         const v4 anti_all_color = anti_player_color + anti_partner_color;
         
-#if 0
-        Texture_Handle blank_texture   = GET_TEXTURE_ID(renderer, blank);
-        Texture_Handle player_texture  = GET_TEXTURE_ID(renderer, player);
-        Texture_Handle hitbox_texture  = GET_TEXTURE_ID(renderer, default_hitbox);
-        Texture_Handle hurtbox_texture = GET_TEXTURE_ID(renderer, default_hurtbox);
-        Texture_Handle untexture       = GET_TEXTURE_ID(renderer, untextured);
-        Texture_Handle solid_texture   = GET_TEXTURE_ID(renderer, default_solid);
-#endif
-        
-        render_set_shader_texture_rgba(renderer);
-        render_set_transform_game_camera(renderer, camera_p, camera_dir, camera_zoom);
+        render_set_transform_game_camera(command_queue->command_list_handle, camera_p, camera_dir, camera_zoom);
         
         { // Players
-            const v4 color = V4(0.0f, 1.0f, 1.0f, 1.0f);
             const u32 count = g->players.count;
+            const u16 handle = GET_MESH_HANDLE(renderer, ball);
+            
+            Mesh_Instance instance = {};
+            instance.color = V4(1.0f);
+            instance.rot = V2(1.0f, 0.0f);
+            instance.scale = V2(1.0f, 1.0f);
             
             for(u32 i = 0; i < count; ++i) {
-                const v2 p = g->players.ps[i];
-                const v2 halfdim = V2(PLAYER_HALFWIDTH, PLAYER_HALFHEIGHT);
+                instance.offset = g->players.ps[i];
                 
-                render_quad(renderer, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
+                render_mesh(command_queue, handle, &instance);
             }
         }
         
         { // Partner
-            const v4 color = V4(0.2f, 1.0f, 0.0f, 1.0f);
+            const u32 count = g->partners.count;
+            const u16 handle = GET_MESH_HANDLE(renderer, partner);
             
-            FORI(0, g->partners.count) {
-                const v2 p = g->partners.ps[i];
-                const v2 halfdim = V2(PARTNER_HALFWIDTH, PARTNER_HALFHEIGHT);
+            Mesh_Instance instance;
+            instance.color = V4(1.0f);
+            instance.rot = V2(1.0f, 0.0f);
+            instance.scale = V2(1.0f);
+            
+            FORI(0, count) {
+                instance.offset = g->partners.ps[i];
                 
-                render_quad(renderer, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
+                render_mesh(command_queue, handle, &instance);
             }
         }
         
         { // Trees
-            const v4 color = V4(0.0f, 0.1f, 0.0f, 1.0f);
             const s32 count = g->trees.count;
             
+            Mesh_Instance instance;
+            instance.color = V4(0.0f, 0.1f, 0.0f, 1.0f);
+            instance.rot = V2(1.0f, 0.0f);
+            instance.scale = V2(1.0f);
+            
             FORI(0, count) {
-                const v2 p = g->trees.ps[i];
-                const v2 halfdim = V2(TREE_HALFWIDTH, TREE_HALFHEIGHT);
+                instance.offset = g->trees.ps[i];
                 
-                render_quad(renderer, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
+                render_quad(renderer, command_queue, &instance);
             }
         }
         
         { // Turrets
-            const v4 color = V4(0.3f, 0.1f, 0.1f, 1.0f);
             const s32 count = g->turrets.count;
             
+            Mesh_Instance instance;
+            instance.color = V4(0.3f, 0.1f, 0.1f, 1.0f);
+            instance.rot = V2(1.0f, 0.0f);
+            instance.scale = V2(1.0f);
+            
             FORI(0, count) {
-                const v2 p = g->turrets.ps[i];
-                const v2 halfdim = V2(TURRET_HALFWIDTH, TURRET_HALFHEIGHT);
+                instance.offset = g->turrets.ps[i];
                 
-                render_quad(renderer, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
+                render_quad(renderer, command_queue, &instance);
             }
         }
         
         { // Bullets
-            const v4 color = anti_all_color;
             const s32 count = g->bullets.count;
             
+            Mesh_Instance instance;
+            instance.color = anti_all_color;
+            instance.rot = V2(1.0f, 0.0f);
+            instance.scale = V2(1.0f);
+            
             FORI(0, count) {
-                const v2 p = g->bullets.ps[i];
+                instance.offset = g->bullets.ps[i];
                 
-                render_circle_prad(renderer, p, BULLET_RADIUS, color);
+                render_quad(renderer, command_queue, &instance);
             }
         }
         
         { // Dogs
-            const v4 color = anti_partner_color;
             const s32 count = g->dogs.count;
+            
+            Mesh_Instance instance;
+            instance.color = anti_partner_color;
+            instance.rot = V2(1.0f, 0.0f);
+            instance.scale = V2(1.0f);
             
             FORI(0, count) {
                 const v2 p = g->dogs.ps[i];
                 
-                render_circle_prad(renderer, p, DOG_RADIUS, color);
+                render_quad(renderer, command_queue, &instance);
             }
         }
         
+#if 0
         { // Wall turrets.
             const v4 color = V4(0.1f, 0.1f, 0.3f, 1.0f);
             const s32 count = g->wall_turrets.count;
             
+            Mesh_Instance instance;
+            instance.color = anti_all_color;
+            instance.rot = V2(1.0f, 0.0f);
+            instance.scale = V2(1.0f);
             
             FORI(0, count) {
                 const v2 p = g->wall_turrets.ps[i];
@@ -1295,8 +1204,10 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Game *g, As
                 queue_quad(renderer, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
             }
         }
-    }
 #endif
+    }
+    
+    maybe_flush_draw_commands(command_queue);
 }
 
 static inline void open_menu(Game_Client *g_cl) {
@@ -1329,24 +1240,6 @@ THREAD_JOB_PROC(test_thread_job) {
     os_platform.print(jobstr);
 }
 
-static s32 *triangulate_polygon(Memory_Block *block, v2 *verts, s32 vert_count) {
-    s32 *vert_indices = push_array(block, s32, (vert_count - 2) * 3);
-    
-    // Dumb convex fan for now.
-    s32 i0 = 0;
-    s32 i1 = 1;
-    s32 index_count = 0;
-    FORI_TYPED(s32, 2, vert_count) {
-        vert_indices[index_count++] = i0;
-        vert_indices[index_count++] = i1;
-        vert_indices[index_count++] = i;
-        
-        i1 = i;
-    }
-    
-    return vert_indices;
-}
-
 GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
     TIME_BLOCK;
     
@@ -1360,7 +1253,6 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
     info->log.heads_up_buffer.data = push_array(game_block, u8, info->log.heads_up_buffer_size);
     info->log.heads_up_buffer.length = 0;
     
-    // @Duplication with g_run_frame.
     global_log = &info->log;
     
     Game_Client    * const        g_cl = &info->client;
@@ -1369,10 +1261,6 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
     Audio_Info     * const  audio_info = &info->audio;
     Text_Info      * const   text_info = &info->text;
     Synth          * const       synth = &info->synth;
-    
-    // Memory partitioning:
-    // sub_block(&renderer->render_queue, game_block, KiB(128));
-    sub_block(&text_info->font_block    , game_block, MiB(  4));
     
     { // Loading the config file.
         bool need_to_load_default_config = true;
@@ -1415,9 +1303,10 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
                 BIND_BUTTON(program_state->input_settings.bindings,    menu,     ESCAPE);
                 BIND_BUTTON(program_state->input_settings.bindings,    jump,   SPACEBAR);
                 BIND_BUTTON(program_state->input_settings.bindings,     run,     LSHIFT);
+                BIND_BUTTON(program_state->input_settings.bindings,  crouch,      LCTRL);
                 
-                BIND_BUTTON(program_state->input_settings.bindings,  editor,        TAB);
-                BIND_BUTTON(program_state->input_settings.bindings, profiler,     LCTRL);
+                BIND_BUTTON(program_state->input_settings.bindings,  editor,         F1);
+                BIND_BUTTON(program_state->input_settings.bindings, profiler,        F2);
                 
                 program_state->input_settings.mouse_sensitivity = 0.001f;
             }
@@ -1432,10 +1321,9 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
     
     // Audio.
     
-    audio_init(audio_info, game_block, program_state->audio_output_rate, program_state->audio_output_channels, core_count);
+    // audio_init(audio_info, game_block, program_state->audio_output_rate, program_state->audio_output_channels, core_count); @Cleanup
     
     init_synth(synth, game_block, CAST(u8, core_count), CAST(u8, program_state->audio_output_channels), program_state->audio_output_rate);
-    
     
 #if GENESIS_DEV
     { // Profiler:
@@ -1445,13 +1333,52 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         
         info->profiler = profiler;
         
-#if GENESIS_DEV // @Duplication
         global_profiler = &info->profiler;
-#endif
     }
 #endif
     
-    render_init(renderer, game_block, 1);
+    { // GPU-sensitive systems.
+        // This is starting a frame that we then are expected to end manually; we might want to make this more explicit?
+        render_init(renderer, game_block, 1);
+        
+        mesh_init(game_block, &info->mesh_editor);
+        
+        Render_Command_Queue *command_queue = get_current_command_queue(renderer);
+        
+        { // Load meshes.
+            // u16 player_mesh_handle = load_mesh(renderer, command_queue, READ_ENTIRE_ASSET(&temporary_memory, &g_cl->assets.datapack, player, mesh));
+            u16 partner_mesh_handle = load_mesh(renderer, command_queue, READ_ENTIRE_ASSET(&temporary_memory, &g_cl->assets.datapack, partner, mesh));
+            u16 ball_mesh_handle = load_mesh(renderer, command_queue, READ_ENTIRE_ASSET(&temporary_memory, &g_cl->assets.datapack, ball, mesh));
+            
+            // put_mesh(renderer, Mesh_Uid::player, player_mesh_handle);
+            put_mesh(renderer, Mesh_Uid::partner, partner_mesh_handle);
+            put_mesh(renderer, Mesh_Uid::ball, ball_mesh_handle);
+        }
+        
+        { // Default edit mesh.
+            Output_Mesh mesh = {};
+            // @Hardcoded
+#define MAX_EDITABLE_MESH_VERTEX_COUNT 256
+            Render_Vertex *vertex_mapped;
+            u16 *index_mapped;
+            u16 handle = os_platform.make_editable_mesh(sizeof(Render_Vertex), MAX_EDITABLE_MESH_VERTEX_COUNT, CAST(u8 **, &vertex_mapped), CAST(u8 **, &index_mapped));
+            
+            
+            mesh.handle = handle;
+            mesh.vertex_mapped = vertex_mapped;
+            mesh.index_mapped = index_mapped;
+            mesh.default_offset = V2();
+            mesh.default_scale = V2(1.0f);
+            mesh.default_rot = V2(1.0f, 0.0f);
+            
+            add_mesh(&info->mesh_editor, &mesh, MAX_EDITABLE_MESH_VERTEX_COUNT, V4(0.3f, 0.07f, 0.0f, 1.0f));
+        }
+        
+        maybe_flush_draw_commands(command_queue);
+        
+        os_platform.submit_commands(&command_queue->command_list_handle, 1, true);
+        render_end_frame(renderer);
+    }
     
 #if 0
     { // Text info:
@@ -1463,7 +1390,7 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
     }
 #endif
     
-#if 0
+#if USE_DATAPACK
     { // Reading a datapack:
         void *handle = os_platform.open_file(STRING("1.datapack"));
         usize length = os_platform.file_size(handle);
@@ -1473,43 +1400,13 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         void *header_memory = push_size(game_block, header_size);
         os_platform.read_file(handle, header_memory, 0, header_size);
         Datapack_Header *header = (Datapack_Header *)header_memory;
+        
         ASSERT(header->version == DATAPACK_VERSION);
         
         Datapack_Handle pack_handle;
         pack_handle.file_handle = handle;
         pack_handle.assets = (Datapack_Asset_Info *)(header + 1);
         g_cl->assets.datapack = pack_handle;
-    }
-#endif
-    
-#if 0
-    { // Getting assets from the datapack:
-        Datapack_Handle pack = g_cl->assets.datapack;
-        
-        { // TA:
-            Asset_Metadata meta = get_asset_metadata(&pack, ASSET_UID_test_ta);
-            
-            string ta = push_string(game_block, meta.size);
-            os_platform.read_file(meta.location.file_handle, ta.data, meta.location.offset, meta.size);
-            
-            ta_to_texture_ids(ta, renderer, renderer->textures_by_uid);
-            
-            renderer->blank_texture_id = FIND_TEXTURE_ID(renderer, blank);
-            renderer->   untextured_id = FIND_TEXTURE_ID(renderer, untextured);
-            renderer->       circle_id = FIND_TEXTURE_ID(renderer, circle);
-        }
-        
-        { // FACS:
-            s16 stereo = LOAD_MUSIC(audio_info, &pack, danse_macabre);
-            Audio_Music_Commands *commands = play_music(audio_info, stereo);
-            commands->volume = 1.0f;
-        }
-        
-        { // Fonts:
-            init_font(&info->text, &pack, FONT_MONO   , ASSET_UID_hack_ttf           );
-            init_font(&info->text, &pack, FONT_FANCY  , ASSET_UID_charter_italic_ttf );
-            init_font(&info->text, &pack, FONT_REGULAR, ASSET_UID_charter_regular_ttf);
-        }
     }
 #endif
     
@@ -1523,37 +1420,20 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         }
     }
     
-    // @XX
     // This is to make sure that game input is properly initted.
-    // close_menu(g_cl);
+    close_menu(g_cl);
     
     info->sim_time = program_state->time;
 }
 
-#if 0 // @XX
-static void draw_xhair(Renderer * const renderer, const Texture_Handle xhair_texture, const v2 xhairp) {
-    ASSERT(f_in_range(xhairp.x, 0.0f, 1.0f) && f_in_range(xhairp.y, 0.0f, 1.0f));
-    queue_quad(renderer, xhair_texture, xhairp, V2(1.0f), V2(1.0f, 0.0f), V4(1.0f));
-}
-#endif
-
-inline void Implicit_Context::reset_temporary_memory() {
-    temporary_memory.used = 0;
-}
-
 void Implicit_Context::clone_game_state(Game *source, Game *clone) {
     TIME_BLOCK;
-    // Saving our dynamic buffers:
-    // None for now!
     
-    // Copying dynamic allocations:
-    // None for now!
-    
-    // Copying the game state:
     mem_copy(source, clone, sizeof(Game));
-    
-    // Restoring dynamic allocations:
-    // None for now!
+}
+
+static void update_menu(Menu *menu, Input *in) {
+    advance_input(in);
 }
 
 GAME_RUN_FRAME(Implicit_Context::g_run_frame) { 
@@ -1565,6 +1445,7 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     Renderer        * const renderer = &info->renderer;
     Audio_Info      * const  audio_info = &info->audio;
     Text_Info       * const   text_info = &info->text;
+    Menu            * const        menu = &info->menu;
     
     // Clock:
     const f64 cur_time = program_state->time;
@@ -1585,15 +1466,7 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     global_log->temporary_buffer.length = 0;
     global_log->heads_up_alpha -= (f32)real_dt;
     
-    { // Parsing the program state:
-        if(program_state) {
-            // @XX
-            // I think we don't even need to take care of this in the game code anymore.
-            // maybe_update_render_size(renderer, program_state->window_size);
-            // mem_copy(&renderer->draw_rect, &program_state->draw_rect, sizeof(rect2s));
-        }
-    }
-    
+    static bool in_mesh_editor = true;
     // We copy input because it's overall more robust to transitions.
     Input game_input = program_state->input;
     Input menu_input = program_state->input;
@@ -1646,9 +1519,11 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     
     { TIME_BLOCK; // Game update:
         if(g_cl->in_menu) {
-            // @XX
-            // update_menu(menu, renderer, &menu_input, program_state);
+            update_menu(menu, &menu_input);
+            
             program_state->input = menu_input;
+            this_frame_sim_time = sim_dt;
+        } else if(in_mesh_editor) {
             this_frame_sim_time = sim_dt;
         } else {
             // If we're too much behind, just drop frames.
@@ -1660,9 +1535,8 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
             while((this_frame_sim_time + PHYSICS_DT) <= sim_dt) {
                 SCOPE_MEMORY(&temporary_memory);
                 
-                // Server frame: actual simulation.
-                // @Temporary
-                // g_full_update(&g_cl->g, &game_input, PHYSICS_DT, audio_info, &g_cl->assets.datapack);
+                // Actual game simulation.
+                g_full_update(&g_cl->g, &game_input, PHYSICS_DT, audio_info, &g_cl->assets.datapack);
                 
                 this_frame_sim_time += PHYSICS_DT;
                 flush_log_to_standard_output(global_log);
@@ -1678,9 +1552,8 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
                 logprint(global_log, "Frame remainder: %fms\n", frame_remainder * 1000.0);
                 Input clone_input = game_input;
                 
-                // @Temporary
-                // clone_game_state(&g_cl->g, &g_cl->visual_state);
-                // g_full_update(&g_cl->visual_state, &clone_input, frame_remainder, 0, 0);
+                clone_game_state(&g_cl->g, &g_cl->visual_state);
+                g_full_update(&g_cl->visual_state, &clone_input, frame_remainder, 0, 0);
             }
             
             program_state->input = game_input;
@@ -1693,190 +1566,48 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     // -  On the first frame.
     // -  During (OS/computer-level) stalls, such as window moving/resizing.
     // -  When our framerate is fast enough, since we're filling the buffer ahead of time.
-    
     u32 samples_to_update = os_platform.begin_sound_update();
     s16* update_buffer = update_synth(&info->synth, samples_to_update);
     os_platform.end_sound_update(update_buffer, samples_to_update);
     
     // Rendering:
-#if 0 // :ReenableGraphics
     if(program_state->should_render) {
+        
         render_begin_frame_and_clear(renderer, V4(1.0f, 0.0f, 1.0f, 1.0f));
+        Render_Command_Queue *command_queue = get_current_command_queue(renderer);
         
-        // draw_game_single_threaded(renderer, &g_cl->visual_state, &g_cl->assets);
-        
-        render_set_transform_right_handed_unit_scale(renderer->command_queue.command_list_handle);
-        
-        // Drawing UI:
-        if(g_cl->in_menu) {
-            f32 render_target_height = CAST(f32, program_state->draw_rect.top - program_state->draw_rect.bottom);
-            draw_menu(menu, g_cl, renderer, text_info, render_target_height);
-        }
-        
-        if((global_log->heads_up_buffer.length > 0) && (global_log->heads_up_alpha > 0.0f)) {
-            // @XX
-            // text_add_string(text_info, renderer, global_log->heads_up_buffer, V2(0.5f, 0.8f), 0.15f, FONT_MONO, true);
-        }
-        
-        if(text_info->strings.count) {
-            text_update(text_info, renderer);
-        }
-        
-        os_platform.submit_commands(&renderer->command_queue.command_list_handle, 1, true);
-        render_end_frame(renderer);
-    }
-#else
-    // Dumb debug frame
-    render_begin_frame_and_clear(renderer, V4(1.0f, 0.0f, 1.0f, 1.0f));
-    
-    Render_Command_Queue *command_queue = get_current_command_queue(renderer);
-    render_set_transform_game_camera(command_queue->command_list_handle, V2(), V2(1.0f, 0.0f), 1.0f);
-    
-    // @Hack
-    static bool first_pass = true;
-    if(first_pass) { // Generate basic meshes.
-        first_pass = false;
-        
-        { // Basic quad.
-            s32 index_count = 6;
-            Render_Vertex *vertex_mapped;
-            u16 *index_mapped;
-            u16 handle = os_platform.make_editable_mesh(sizeof(Render_Vertex), 4, CAST(u8 **, &vertex_mapped), CAST(u8 **, &index_mapped));
-            ASSERT(handle == RESERVED_MESH_HANDLE::QUAD);
+        if(in_mesh_editor) {
+            mesh_update(&info->mesh_editor, renderer, &menu_input, command_queue);
             
-            vertex_mapped[0] = make_render_vertex(V2(0.5f, 0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
-            vertex_mapped[1] = make_render_vertex(V2(-0.5f, 0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
-            vertex_mapped[2] = make_render_vertex(V2(-0.5f, -0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
-            vertex_mapped[3] = make_render_vertex(V2(0.5f, -0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            program_state->input = menu_input;
+        } else {
             
-            index_mapped[0] = 0;
-            index_mapped[1] = 1;
-            index_mapped[2] = 2;
-            index_mapped[3] = 0;
-            index_mapped[4] = 2;
-            index_mapped[5] = 3;
+            draw_game_single_threaded(renderer, command_queue, &g_cl->visual_state, &g_cl->assets);
             
-            os_platform.update_editable_mesh(command_queue->command_list_handle, handle, index_count, true);
-        }
-        
-        { // Color picker.
-            // @Hack: The actual rendered color picker doesn't match the colors we sample from it. This is a quick and dirty
-            // way of approximating the results.
-            // Normally you'd interpolate in HSV and then convert to RGB rather than interpolating directly in RGB.
-            s32 index_count = 6;
-            Render_Vertex *vertex_mapped;
-            u16 *index_mapped;
-            u16 handle = os_platform.make_editable_mesh(sizeof(Render_Vertex), 4, CAST(u8 **, &vertex_mapped), CAST(u8 **, &index_mapped));
-            ASSERT(handle == RESERVED_MESH_HANDLE::COLOR_PICKER);
+            render_set_transform_right_handed_unit_scale(command_queue->command_list_handle);
             
-            vertex_mapped[0] = make_render_vertex(V2(0.5f, 0.5f), V4(1.0f, 0.0f, 0.0f, 1.0f));
-            vertex_mapped[1] = make_render_vertex(V2(-0.5f, 0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
-            vertex_mapped[2] = make_render_vertex(V2(-0.5f, -0.5f), V4(0.0f, 0.0f, 0.0f, 1.0f));
-            vertex_mapped[3] = make_render_vertex(V2(0.5f, -0.5f), V4(0.0f, 0.0f, 0.0f, 1.0f));
-            
-            index_mapped[0] = 0;
-            index_mapped[1] = 1;
-            index_mapped[2] = 2;
-            index_mapped[3] = 0;
-            index_mapped[4] = 2;
-            index_mapped[5] = 3;
-            
-            renderer->color_picker_color = &vertex_mapped[0].color;
-            
-            os_platform.update_editable_mesh(command_queue->command_list_handle, handle, index_count, false);
-        }
-        
-        { // Hue picker.
-            // @Hack: We could make an HSV shader instead of lerping through all the hues.
-            v4 hues[] = {
-                V4(1.0f, 0.0f, 0.0f, 1.0f),
-                V4(1.0f, 1.0f, 0.0f, 1.0f),
-                V4(0.0f, 1.0f, 0.0f, 1.0f),
-                V4(0.0f, 1.0f, 1.0f, 1.0f),
-                V4(0.0f, 0.0f, 1.0f, 1.0f),
-                V4(1.0f, 0.0f, 1.0f, 1.0f),
-                V4(1.0f, 0.0f, 0.0f, 1.0f),
-            };
-            
-            Render_Vertex *vertex_mapped;
-            u16 *index_mapped;
-            u16 handle = os_platform.make_editable_mesh(sizeof(Render_Vertex), 2 * ARRAY_LENGTH(hues), CAST(u8 **, &vertex_mapped), CAST(u8 **, &index_mapped));
-            ASSERT(handle == RESERVED_MESH_HANDLE::HUE_PICKER);
-            
-            s32 index_count = 0;
-            {
-                f32 at_y = -0.5f;
-                f32 y_step = 1.0f / (ARRAY_LENGTH(hues) - 1);
-                vertex_mapped[0] = make_render_vertex(V2(-0.5f, at_y), hues[0]);
-                vertex_mapped[1] = make_render_vertex(V2(0.5f, at_y), hues[0]);
-                
-                u16 running_vertex_index = 2;
-                s32 running_index_index = 0;
-                FORI_NAMED(hue_index, 1, ARRAY_LENGTH(hues)) {
-                    at_y += y_step;
-                    
-                    vertex_mapped[running_vertex_index + 0] = make_render_vertex(V2(-0.5f, at_y), hues[hue_index]);
-                    vertex_mapped[running_vertex_index + 1] = make_render_vertex(V2(0.5f, at_y), hues[hue_index]);
-                    
-                    index_mapped[running_index_index + 0] = running_vertex_index - 2;
-                    index_mapped[running_index_index + 1] = running_vertex_index - 1;
-                    index_mapped[running_index_index + 2] = running_vertex_index + 1;
-                    index_mapped[running_index_index + 3] = running_vertex_index - 2;
-                    index_mapped[running_index_index + 4] = running_vertex_index + 1;
-                    index_mapped[running_index_index + 5] = running_vertex_index + 0;
-                    
-                    running_vertex_index += 2;
-                    running_index_index += 6;
-                }
-                
-                index_count = running_index_index;
+            // Drawing UI:
+            if(g_cl->in_menu) {
+                f32 render_target_height = CAST(f32, program_state->draw_rect.top - program_state->draw_rect.bottom);
+                // @XX
+                // draw_menu(menu, g_cl, renderer, text_info, render_target_height);
             }
             
-            os_platform.update_editable_mesh(command_queue->command_list_handle, handle, index_count, true);
+            if((global_log->heads_up_buffer.length > 0) && (global_log->heads_up_alpha > 0.0f)) {
+                // @XX
+                // text_add_string(text_info, renderer, global_log->heads_up_buffer, V2(0.5f, 0.8f), 0.15f, FONT_MONO, true);
+            }
+            
+            if(text_info->strings.count) {
+                text_update(text_info, renderer);
+            }
         }
         
-        Output_Mesh mesh = {};
-        { // Default edit mesh.
-            // @Hardcoded
-#define MAX_EDITABLE_MESH_VERTEX_COUNT 256
-            s32 index_count = 3;
-            Render_Vertex *vertex_mapped;
-            u16 *index_mapped;
-            u16 handle = os_platform.make_editable_mesh(sizeof(Render_Vertex), MAX_EDITABLE_MESH_VERTEX_COUNT, CAST(u8 **, &vertex_mapped), CAST(u8 **, &index_mapped));
-            
-            vertex_mapped[0] = make_render_vertex(V2( 0.0f, 0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
-            vertex_mapped[1] = make_render_vertex(V2(-0.5f, 0.0f), V4(1.0f, 1.0f, 1.0f, 1.0f));
-            vertex_mapped[2] = make_render_vertex(V2( 0.5f, 0.0f), V4(1.0f, 1.0f, 1.0f, 1.0f));
-            
-            index_mapped[0] = 0;
-            index_mapped[1] = 1;
-            index_mapped[2] = 2;
-            
-            os_platform.update_editable_mesh(command_queue->command_list_handle, handle, index_count, false);
-            
-            mesh_init(game_block, &info->mesh_editor);
-            
-            mesh.handle = handle;
-            mesh.vertex_mapped = vertex_mapped;
-            mesh.index_mapped = index_mapped;
-            mesh.vert_count = 3;
-            mesh.index_count = 3;
-            mesh.default_offset = V2();
-            mesh.default_scale = V2(1.0f);
-            mesh.default_rot = V2(1.0f, 0.0f);
-            info->edit_mesh = add_mesh(&info->mesh_editor, &mesh, MAX_EDITABLE_MESH_VERTEX_COUNT, V4(0.3f, 0.07f, 0.0f, 1.0f));
-        }
+        maybe_flush_draw_commands(command_queue);
+        
+        os_platform.submit_commands(&command_queue->command_list_handle, 1, true);
+        render_end_frame(renderer);
     }
-    
-    mesh_update(&info->mesh_editor, renderer, &menu_input, command_queue);
-    program_state->input = menu_input;
-    
-    flush_log_to_standard_output(global_log);
-    
-    os_platform.submit_commands(&command_queue->command_list_handle, 1, true);
-    
-    render_end_frame(renderer);
-#endif
     
 #if GENESIS_DEV
     profile_update(profiler, program_state, text_info, renderer, &profiler_input);

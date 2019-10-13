@@ -19,7 +19,7 @@ struct Implicit_Context {
     s16 *update_audio(Audio_Info *, const s32, const f32);
     void load_chunk(Loaded_Sound *, s16 *, s32, s32);
     inline void reset_temporary_memory();
-    void draw_game_single_threaded(Renderer *, Game *, Asset_Storage *);
+    void draw_game_single_threaded(Renderer *, Render_Command_Queue *, Game *, Asset_Storage *);
     string tprint(char *, ...);
     void clone_game_state(Game *, Game *);
     void mix_samples(const s16 *, const s32, f32, const f32, f32 *, s32, f32 *, f32 *, f32 **, const u8);
@@ -32,7 +32,10 @@ struct Implicit_Context {
     void text_update(Text_Info *, Renderer *);
     void render_init(Renderer*, Memory_Block*, u8);
     s16* update_synth(Synth*, const s32);
+    u16 load_mesh(Renderer *, Render_Command_Queue *, string);
+    
     void mesh_update(Mesh_Editor *, Renderer *, Input *, Render_Command_Queue *);
+    
     void export_mesh(Edit_Mesh *);
     
     void draw_game_threaded(void *);

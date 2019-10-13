@@ -4,10 +4,11 @@ REM call "..\..\tools\msvc.bat"
 
 set ProjectName=genesis
 set DevFlag=1
+set UseDatapack=0
 
 set CommonCompilerFlags= -Od -nologo -fp:fast -fp:except- -Gm- -GR- -EHa- -Zo -Oi -WX -W4 -wd4201 -wd4505 -wd4127 -wd4100 -FC -Z7
 REM Custom compiler flags
-set CommonCompilerFlags=%CommonCompilerFlags% -DGENESIS_DEV=%DevFlag%
+set CommonCompilerFlags=%CommonCompilerFlags% -DGENESIS_DEV=%DevFlag% -DUSE_DATAPACK=%UseDatapack%
 REM These flags act more as linter flags: static analysis and unreferenced local variables
 REM set CommonCompilerFlags=-analyze %CommonCompilerFlags%
 set CommonCompilerFlags=-wd4189 %CommonCompilerFlags%

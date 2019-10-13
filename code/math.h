@@ -32,6 +32,17 @@ struct v4 {
             f32 b;
             f32 a;
         };
+        
+        struct {
+            v3 xyz;
+            f32 w;
+        };
+        
+        struct {
+            v2 xy;
+            v2 zw;
+        };
+        
         f32 by_element[4];
     };
 };

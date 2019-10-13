@@ -507,30 +507,6 @@ void Implicit_Context::mix_samples(const s16 *samples, const s32 pitched_sample_
     }
 }
 
-THREAD_JOB_PROC(entire_sound_update) {
-    TIME_BLOCK;
-    
-    Entire_Sound_Update_Payload *payload = (Entire_Sound_Update_Payload *)data;
-    Audio_Info *audio = payload->audio;
-    f32 dt = payload->dt;
-    
-#if GENESIS_DEV
-    ASSERT(!audio->being_updated);
-    audio->being_updated = true;
-#endif
-    
-    u32 samples_to_update = os_platform.begin_sound_update();
-    s16 *update_buffer = 0;
-    if(samples_to_update) {
-        update_buffer = update_audio(audio, samples_to_update, dt);
-    }
-    os_platform.end_sound_update(update_buffer, samples_to_update);
-    
-#if GENESIS_DEV
-    audio->being_updated = false;
-#endif
-}
-
 s16 *Implicit_Context::update_audio(Audio_Info *audio, const s32 samples_to_play, const f32 dt) {
     TIME_BLOCK;
     SCOPE_MEMORY(&temporary_memory);

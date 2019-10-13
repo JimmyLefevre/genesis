@@ -22,9 +22,20 @@ struct Output_Mesh {
     v2 default_rot;
 };
 
+//
+//
+// We have two ways of managing mesh offset/rot/scale:
+// - one is to have a default_X value that gets loaded with the mesh, and that becomes
+// a per-instance multiply at submit time
+// - another is to bake everything into the vert offsets themselves
+// For editing purposes, the first option is probably more robust to floating-point BS?
+// And also probably nicer to use as a whole, even if it's marginally slower.
+//
+//
+
 struct Edit_Mesh_Layer {
-    v2 verts[MAX_VERTS_PER_LAYER];
-    u16 indices[MAX_INDICES_PER_LAYER];
+    v2 *verts;
+    u16 *indices;
     
     u16 vert_count;
     
@@ -34,7 +45,9 @@ struct Edit_Mesh_Layer {
 struct Edit_Mesh {
     u16 layer_count;
     u16 current_layer;
-    Edit_Mesh_Layer layers[MAX_LAYERS_PER_MESH];
+    Edit_Mesh_Layer *layers;
+    
+    v2 center_point;
     
     Output_Mesh output;
 };
@@ -59,6 +72,7 @@ ENUM(MESH_EDITOR_UI_SELECTION) {
     
     VERTEX,
     EDGE,
+    CENTER_POINT,
     
     COLOR_PICKER,
     HUE_PICKER,
@@ -131,6 +145,8 @@ struct Mesh_Editor {
     bool snap_to_grid;
     bool snap_to_edge;
     bool expanded_mesh_picker;
+    
+    v2 color_picker_uv;
     
     s32 mesh_count;
     Edit_Mesh meshes[MAX_EDIT_MESH_COUNT];

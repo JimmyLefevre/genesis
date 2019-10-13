@@ -139,46 +139,35 @@ struct Game_Client {
     Asset_Storage assets;
 };
 
-struct Entire_Sound_Update_Payload {
-    Audio_Info *audio;
-    f32 dt;
-};
-
-
-struct Draw_Game_Threaded_Payload {
-    Renderer* renderer;
-    Game* g;
-    Asset_Storage* assets;
+struct Menu {
 };
 
 struct Render_Vertex;
 struct Game_Block_Info {
     Game_Client client;
     Renderer renderer;
-    Audio_Info audio;
-    Text_Info text;
-    f64 sim_time;
-    Log log;
+    
+    Menu menu;
     Synth synth;
     
-    Entire_Sound_Update_Payload sound_update_payload;
+    f64 sim_time;
     
-    Draw_Game_Threaded_Payload *draw_game_threaded_payload;
+    // @Cleanup: These two systems are obsolete.
+    Audio_Info audio;
+    Text_Info text;
     
+    Log log;
     Mesh_Editor mesh_editor;
-    
-    u16 edit_mesh;
     
 #if GENESIS_DEV
     Profiler profiler;
 #endif
 };
 
-// @Serialisation
-#define USER_CONFIG_VERSION 1
+#define USER_CONFIG_VERSION 4
 
 #pragma pack(push, 1)
-struct User_Config {
+struct User_Config { // ;Serialized
     s32 version;
     bool fullscreen; // @Compression
     v2s16 window_dim; // Only relevant if windowed.

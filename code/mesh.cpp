@@ -1,6 +1,18 @@
 
 static void mesh_init(Memory_Block *block, Mesh_Editor *editor) {
     sub_block(&editor->undo_buffer.block, block, KiB(1));
+    
+    FORI(0, MAX_EDIT_MESH_COUNT) {
+        Edit_Mesh *mesh = &editor->meshes[i];
+        
+        mesh->layers = push_array(block, Edit_Mesh_Layer, MAX_LAYERS_PER_MESH);
+        FORI_NAMED(layer_index, 0, MAX_LAYERS_PER_MESH) {
+            Edit_Mesh_Layer *layer = &mesh->layers[layer_index];
+            
+            layer->verts = push_array(block, v2, MAX_VERTS_PER_LAYER);
+            layer->indices = push_array(block, u16, MAX_INDICES_PER_LAYER);
+        }
+    }
 }
 
 static void edit_mesh_init(Mesh_Editor *editor, Edit_Mesh *mesh) {
@@ -18,6 +30,7 @@ static u16 add_mesh(Mesh_Editor *editor, Output_Mesh *output, s32 vert_capacity,
     
     auto first_layer = &mesh->layers[0];
     first_layer->vert_count = 0;
+    
     mesh->output = *output;
     
     FORI(0, output->vert_count) {
@@ -196,7 +209,7 @@ static Edit_Mesh_Undo *save_undo_snapshot(Mesh_Editor *editor, u16 mesh_index) {
         mem_copy(layer->verts, serialized_verts, sizeof(v2) * vert_count);
         mem_copy(layer->indices, serialized_indices, sizeof(u16) * index_count);
         
-        ASSERT((CAST(sptr, layer->indices + index_count) - CAST(sptr, undo)) <= CAST(sptr, allocation_size));
+        ASSERT((CAST(sptr, serialized_indices + index_count) - CAST(sptr, undo)) <= CAST(sptr, allocation_size));
         logprint(global_log, "Undo size: %u\n", allocation_size);
         
         return undo;
@@ -291,8 +304,8 @@ static void restore_state(Mesh_Editor *editor, Edit_Mesh_Undo *undo) {
     }
 }
 
-struct Serialized_Mesh_Layout {
-    Serialized_Mesh *header;
+struct Serialized_Edit_Mesh_Layout {
+    Serialized_Edit_Mesh *header;
     
     v4 *layer_colors;
     u16 *layer_running_vert_count;
@@ -301,13 +314,13 @@ struct Serialized_Mesh_Layout {
     u16 *indices;
 };
 
-static usize layout_serialized_mesh(Serialized_Mesh *mesh, Serialized_Mesh_Layout *layout,
+static usize layout_serialized_mesh(Serialized_Edit_Mesh *mesh, Serialized_Edit_Mesh_Layout *layout,
                                     s32 vert_total) {
     usize length = 0;
     s32 layer_count = mesh->layer_count;
     
     layout->header = mesh;
-    length += sizeof(Serialized_Mesh);
+    length += sizeof(Serialized_Edit_Mesh);
     
     layout->layer_colors = CAST(v4 *, mesh + 1);
     length += sizeof(v4) * layer_count;
@@ -330,92 +343,222 @@ static usize layout_serialized_mesh(Serialized_Mesh *mesh, Serialized_Mesh_Layou
 }
 
 void Implicit_Context::export_mesh(Edit_Mesh *mesh) {
-    Scoped_Memory scoped_memory = Scoped_Memory(&temporary_memory);
-    auto layer_count = mesh->layer_count;
-    
-    Serialized_Mesh *serialized = CAST(Serialized_Mesh *, temporary_memory.mem + temporary_memory.used);
-    
-    // @Hardcoded
-    serialized->offset = V2();
-    serialized->scale = V2();
-    serialized->rot = V2(1.0f, 0.0f);
-    
-    ASSERT(layer_count <= 255);
-    serialized->layer_count = CAST(u8, layer_count);
-    
-    s32 vert_total = 0;
-    FORI(0, layer_count) {
-        vert_total += mesh->layers[i].vert_count;
-    }
-    
-    Serialized_Mesh_Layout layout;
-    
-    usize length = layout_serialized_mesh(serialized, &layout, vert_total);
-    
-    if(length <= (temporary_memory.size - temporary_memory.used)) {
-        u16 running_vert_count = 0;
-        u16 running_index_count = 0;
+    { // Serialized_Edit_Mesh
+        Scoped_Memory scoped_memory = Scoped_Memory(&temporary_memory);
+        auto layer_count = mesh->layer_count;
+        
+        Serialized_Edit_Mesh *serialized = CAST(Serialized_Edit_Mesh *, temporary_memory.mem + temporary_memory.used);
+        
+        serialized->center_point = mesh->center_point;
+        // @Hardcoded
+        serialized->offset = V2();
+        serialized->scale = V2();
+        serialized->rot = V2(1.0f, 0.0f);
+        
+        ASSERT(layer_count <= 255);
+        serialized->layer_count = CAST(u8, layer_count);
+        
+        s32 vert_total = 0;
         FORI(0, layer_count) {
-            u16 vert_count = mesh->layers[i].vert_count;
-            u16 index_count = CAST(u16, index_count_or_zero(vert_count));
-            
-            mem_copy(mesh->layers[i].verts, layout.verts + running_vert_count, sizeof(v2) * vert_count);
-            mem_copy(mesh->layers[i].indices, layout.indices + running_index_count, sizeof(u16) * index_count);
-            
-            running_vert_count += vert_count;
-            running_index_count += index_count;
-            
-            layout.layer_colors[i] = mesh->layers[i].color;
-            layout.layer_running_vert_count[i] = running_vert_count;
+            vert_total += mesh->layers[i].vert_count;
         }
         
-        string file;
-        file.data = CAST(u8 *, serialized);
-        file.length = length;
+        Serialized_Edit_Mesh_Layout layout;
         
-        os_platform.write_entire_file(STRING("test.mesh"), file);
-    } else UNHANDLED;
+        usize length = layout_serialized_mesh(serialized, &layout, vert_total);
+        
+        if(length <= (temporary_memory.size - temporary_memory.used)) {
+            u16 running_vert_count = 0;
+            u16 running_index_count = 0;
+            FORI(0, layer_count) {
+                u16 vert_count = mesh->layers[i].vert_count;
+                u16 index_count = CAST(u16, index_count_or_zero(vert_count));
+                
+                if(vert_count) {
+                    mem_copy(mesh->layers[i].verts, layout.verts + running_vert_count, sizeof(v2) * vert_count);
+                    mem_copy(mesh->layers[i].indices, layout.indices + running_index_count, sizeof(u16) * index_count);
+                    
+                    running_vert_count += vert_count;
+                    running_index_count += index_count;
+                }
+                
+                layout.layer_colors[i] = mesh->layers[i].color;
+                layout.layer_running_vert_count[i] = running_vert_count;
+            }
+            
+            string file;
+            file.data = CAST(u8 *, serialized);
+            file.length = length;
+            
+            os_platform.write_entire_file(STRING("latest.edit_mesh"), file);
+        } else UNHANDLED;
+    }
+    
+    { // Serialized_Render_Mesh @Duplication
+        Scoped_Memory scoped_memory = Scoped_Memory(&temporary_memory);
+        auto layer_count = mesh->layer_count;
+        
+        Serialized_Render_Mesh *serialized = CAST(Serialized_Render_Mesh *, temporary_memory.mem + temporary_memory.used);
+        
+        serialized->version = SERIALIZED_RENDER_MESH_VERSION;
+        // @Hardcoded
+        // In hindsight, we shouldn't need these until we implement some sort of vertex compression.
+        serialized->default_offset = V2();
+        serialized->default_scale = V2();
+        serialized->default_rotation = V2(1.0f, 0.0f);
+        
+        s32 vert_total = 0;
+        FORI(0, layer_count) {
+            vert_total += mesh->layers[i].vert_count;
+        }
+        
+        s32 index_total = 0;
+        if(vert_total) {
+            index_total = (vert_total - 2) * 3;
+        }
+        
+        serialized->vertex_count = CAST(u16, vert_total);
+        
+        usize length = sizeof(Serialized_Render_Mesh) + sizeof(Render_Vertex) * vert_total + sizeof(u16) * index_total;
+        
+        Render_Vertex *verts = CAST(Render_Vertex *, serialized + 1);
+        u16 *indices = CAST(u16 *, verts + vert_total);
+        
+        if(length <= (temporary_memory.size - temporary_memory.used)) {
+            s32 running_vert_count = 0;
+            s32 running_index_count = 0;
+            
+            FORI(0, layer_count) {
+                Edit_Mesh_Layer *layer = &mesh->layers[i];
+                u16 vert_count = layer->vert_count;
+                u16 index_count = CAST(u16, index_count_or_zero(vert_count));
+                
+                if(vert_count) {
+                    FORI_NAMED(vert_index, 0, vert_count) {
+                        Render_Vertex *vert = &verts[running_vert_count + vert_index];
+                        
+                        vert->p = layer->verts[vert_index] - mesh->center_point;
+                        vert->color = layer->color;
+                    }
+                    
+                    FORI_NAMED(index_index, 0, index_count) {
+                        indices[running_index_count + index_index] = CAST(u16, layer->indices[index_index] + running_vert_count);
+                    }
+                    
+                    running_vert_count += vert_count;
+                    running_index_count += index_count;
+                }
+            }
+            
+            string file;
+            file.data = CAST(u8 *, serialized);
+            file.length = length;
+            
+            os_platform.write_entire_file(STRING("latest.mesh"), file);
+        } else UNHANDLED;
+    }
 }
 
-static void import_mesh(Edit_Mesh *mesh) {
-    string file = os_platform.read_entire_file(STRING("test.mesh"));
+static void import_mesh(Edit_Mesh *mesh, string name) {
+    string file = os_platform.read_entire_file(name);
     
     if(file.data) {
-        Serialized_Mesh *serialized = CAST(Serialized_Mesh *, file.data);
-        Serialized_Mesh_Layout layout;
-        layout_serialized_mesh(serialized, &layout, -1);
+        Serialized_Edit_Mesh *serialized = CAST(Serialized_Edit_Mesh *, file.data);
         
-        ASSERT(serialized->layer_count);
-        u16 layer_count = serialized->layer_count;
-        mesh->layer_count = layer_count;
-        mesh->current_layer = 0;
-        
-        u16 running_vert_count = 0;
-        u16 running_index_count = 0;
-        FORI(0, layer_count) {
-            Edit_Mesh_Layer *layer = &mesh->layers[i];
+        if(serialized->version == SERIALIZED_EDIT_MESH_VERSION) {
+            Serialized_Edit_Mesh_Layout layout;
+            layout_serialized_mesh(serialized, &layout, -1);
             
-            u16 vert_count = layout.layer_running_vert_count[i] - running_vert_count;
-            u16 index_count = CAST(u16, index_count_or_zero(vert_count));
+            ASSERT(serialized->layer_count);
+            u16 layer_count = serialized->layer_count;
+            mesh->layer_count = layer_count;
+            mesh->current_layer = 0;
             
-            mem_copy(layout.verts + running_vert_count,    layer->verts,   sizeof(v2)  *  vert_count);
-            mem_copy(layout.indices + running_index_count, layer->indices, sizeof(u16) * index_count);
-            
-            running_vert_count += vert_count;
-            running_index_count += index_count;
-            
-            layer->vert_count = vert_count;
-            layer->color = layout.layer_colors[i];
+            u16 running_vert_count = 0;
+            u16 running_index_count = 0;
+            FORI(0, layer_count) {
+                Edit_Mesh_Layer *layer = &mesh->layers[i];
+                
+                u16 vert_count = layout.layer_running_vert_count[i] - running_vert_count;
+                u16 index_count = CAST(u16, index_count_or_zero(vert_count));
+                
+                if(vert_count) { //ASSERT(vert_count);
+                    
+                    mem_copy(layout.verts + running_vert_count,    layer->verts,   sizeof(v2)  *  vert_count);
+                    mem_copy(layout.indices + running_index_count, layer->indices, sizeof(u16) * index_count);
+                    
+                    running_vert_count += vert_count;
+                    running_index_count += index_count;
+                }
+                
+                layer->vert_count = vert_count;
+                layer->color = layout.layer_colors[i];
+            }
         }
     }
 }
 
+static v3 recompute_color_picker_selection(v3 hue, v2 uv) {
+    const v3 white = V3(1.0f);
+    const v3 black = V3(0.0f);
+    
+    v3 color = v3_hadamard_prod(v3_lerp(white, hue, uv.x), v3_lerp(black, white, uv.y));
+    
+    return color;
+}
+
+static inline void scale_verts_from_center_point(v2 *verts, s32 vert_count, v2 center_point, f32 scale) {
+    FORI(0, vert_count) {
+        v2 dp = verts[i] - center_point;
+        
+        verts[i] += dp * scale;
+    }
+}
+
+static inline void rotate_verts_around_center_point(v2 *verts, s32 vert_count, v2 center_point, v2 rot) {
+    FORI(0, vert_count) {
+        v2 dp = verts[i] - center_point;
+        
+        v2 rotated = v2_complex_prod(dp, rot);
+        
+        verts[i] = center_point + rotated;
+    }
+}
+
+static inline void scale_rot_drag_interact(Input *in, v2 *cursor_p, bool *should_draw_cursor, bool *triangulate_layer,
+                                           f32 *dscale, v2 *rot, v2 *drag) {
+    const bool jump_down = BUTTON_DOWN(in, jump);
+    const bool run_down = BUTTON_DOWN(in, run);
+    const bool crouch_down = BUTTON_DOWN(in, crouch);
+    
+    if(!BUTTON_PRESSED(in, jump) && !BUTTON_PRESSED(in, run) && !BUTTON_PRESSED(in, crouch)) {
+        if(jump_down) {
+            // Scale the layer.
+            *dscale = cursor_p->y * 0.1f;
+            
+        } else if(run_down) {
+            // Rotate the layer.
+            f32 drot = cursor_p->y * 0.1f;
+            *rot = v2_angle_to_complex(drot);
+        } else if(crouch_down) {
+            *drag = *cursor_p;
+        }
+    }
+    
+    if(jump_down || run_down || crouch_down) {
+        *should_draw_cursor = false;
+        *cursor_p = V2();
+        *triangulate_layer = true;
+    }
+}
 
 static v2 unit_scale_to_world_space_offset(v2, f32);
 static v2 world_space_offset_to_unit_scale(v2, f32);
 void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Input *in, Render_Command_Queue *command_queue) {
     using namespace MESH_EDITOR_UI_SELECTION;
     SCOPE_MEMORY(&temporary_memory);
+    
+    render_set_transform_game_camera(command_queue->command_list_handle, V2(), V2(1.0f, 0.0f), 1.0f);
     
     u16 current_mesh_index = editor->current_mesh;
     
@@ -429,13 +572,15 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
     
     bool should_draw_cursor = true;
     bool triangulate_layer = false;
+    bool triangulate_the_whole_mesh = false;
     
-    // @Hack
-    static bool first_pass = true;
-    if(first_pass) {
-        first_pass = false;
-        import_mesh(mesh);
-        triangulate_layer = true;
+    { // @Hack
+        static bool first_pass = true;
+        if(first_pass) {
+            first_pass = false;
+            import_mesh(mesh, STRING("latest.edit_mesh"));
+            triangulate_layer = true;
+        }
     }
     
     if(BUTTON_PRESSED(in, slot1)) {
@@ -469,20 +614,37 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
         interaction->selection = NONE;
     }
     
-    if(BUTTON_PRESSED(in, up)) {
-        editor->highlight_all_vertices = !editor->highlight_all_vertices;
-    }
-    if(BUTTON_PRESSED(in, left)) {
-        editor->snap_to_grid = !editor->snap_to_grid;
-    }
-    if(BUTTON_PRESSED(in, down)) {
-        editor->snap_to_edge = !editor->snap_to_edge;
-    }
-    if(BUTTON_PRESSED(in, right)) {
-        export_mesh(mesh);
-        import_mesh(mesh);
-        
-        triangulate_layer = true;
+    if(!BUTTON_DOWN(in, crouch)) {
+        if(BUTTON_PRESSED(in, up)) {
+            editor->highlight_all_vertices = !editor->highlight_all_vertices;
+        }
+        if(BUTTON_PRESSED(in, left)) {
+            editor->snap_to_grid = !editor->snap_to_grid;
+        }
+        if(BUTTON_PRESSED(in, down)) {
+            editor->snap_to_edge = !editor->snap_to_edge;
+        }
+        if(BUTTON_PRESSED(in, right)) {
+            export_mesh(mesh);
+        }
+    } else {
+        if(BUTTON_PRESSED(in, up)) {
+            s32 swap0 = mesh->current_layer;
+            s32 swap1 = swap0 + 1;
+            
+            if(swap1 < MAX_LAYERS_PER_MESH) {
+                SWAP(mesh->layers[swap0], mesh->layers[swap1]);
+                mesh->current_layer = CAST(u16, swap1);
+            }
+        } else if(BUTTON_PRESSED(in, down)) { // @Duplication
+            s32 swap0 = mesh->current_layer;
+            s32 swap1 = swap0 - 1;
+            
+            if(swap1 < MAX_LAYERS_PER_MESH) {
+                SWAP(mesh->layers[swap0], mesh->layers[swap1]);
+                mesh->current_layer = CAST(u16, swap1);
+            }
+        }
     }
     
     s32 current_layer_index = mesh->current_layer;
@@ -490,6 +652,16 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
     s32 vert_count_at_start_of_update = current_layer->vert_count;
     
     if(interaction->selection == NONE) {
+        if(v2_length_sq(cursor_p - mesh->center_point) < (0.1f * 0.1f)) {
+            if(BUTTON_PRESSED(in, attack)) {
+                interaction->selection = CENTER_POINT;
+            } else {
+                hover.selection = CENTER_POINT;
+            }
+        }
+    }
+    
+    if((hover.selection == NONE) && (interaction->selection == NONE)) {
         FORI_TYPED_NAMED(s32, b_index, 0, current_layer->vert_count) {
             v2 b = current_layer->verts[b_index];
             
@@ -744,6 +916,18 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             }
         } break;
         
+        case CENTER_POINT: {
+            if(BUTTON_PRESSED(in, attack)) {
+                cursor_p = V2();
+            }
+            
+            v2 dp = cursor_p;
+            mesh->center_point += dp;
+            
+            cursor_p = V2();
+            should_draw_cursor = false;
+        } break;
+        
         case COLOR_PICKER: {
             if(BUTTON_PRESSED(in, attack)) {
                 interaction->color_picker.layer_color_before = current_layer->color;
@@ -769,12 +953,10 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                     color_picker_uv.x = f_clamp(color_picker_uv.x, 0.0f, 1.0f);
                     color_picker_uv.y = f_clamp(color_picker_uv.y, 0.0f, 1.0f);
                     
-                    v3 white = V3(1.0f);
-                    v3 black = V3(0.0f);
-                    v3 hue = V3(1.0f, 0.0f, 0.0f);
+                    v3 color = recompute_color_picker_selection(renderer->color_picker_color->xyz, color_picker_uv);
                     
-                    v3 color = v3_hadamard_prod(v3_lerp(white, hue, color_picker_uv.x), v3_lerp(black, white, color_picker_uv.y));
                     current_layer->color = V4(color, 1.0f);
+                    editor->color_picker_uv = color_picker_uv;
                 }
                 
                 triangulate_layer = true;
@@ -808,19 +990,23 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                 f32 lerp_factor = f_reverse_lerp(item_bottom, item_top, cursor_p.y);
                 
                 v4 color = v4_lerp(hues[item_index], hues[item_index + 1], lerp_factor);
-                
                 set_color_picker_hue(renderer, command_queue->command_list_handle, color);
+                
+                v3 selected = recompute_color_picker_selection(renderer->color_picker_color->xyz, editor->color_picker_uv);
+                current_layer->color = V4(selected, 1.0f);
+                
+                triangulate_layer = true;
             }
         } break;
         
         case LAYER_PICKER: {
             if(BUTTON_PRESSED(in, attack)) {
-                f32 picker_bottom = layout[layer_picker].bottom;
-                f32 picker_height = layout[layer_picker].top - picker_bottom;
-                f32 relative_cursor_height = cursor_p.y - picker_bottom;
-                f32 item_height = picker_height / MAX_LAYERS_PER_MESH;
+                const f32 picker_bottom = layout[layer_picker].bottom;
+                const f32 picker_height = layout[layer_picker].top - picker_bottom;
+                const f32 relative_cursor_height = cursor_p.y - picker_bottom;
+                const f32 item_height = picker_height / MAX_LAYERS_PER_MESH;
                 
-                s32 picked_index = CAST(s32, relative_cursor_height / item_height);
+                const s32 picked_index = CAST(s32, relative_cursor_height / item_height);
                 
                 if(picked_index >= mesh->layer_count) {
                     mesh->layer_count = CAST(u16, picked_index + 1);
@@ -828,6 +1014,21 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                 
                 if(picked_index <= mesh->layer_count) {
                     mesh->current_layer = CAST(u16, s_min(mesh->layer_count - 1, picked_index));
+                }
+            }
+            
+            f32 dscale = 0.0f;
+            v2 rot = V2();
+            v2 drag = V2();
+            scale_rot_drag_interact(in, &cursor_p, &should_draw_cursor, &triangulate_layer, &dscale, &rot, &drag);
+            
+            if(dscale) {
+                scale_verts_from_center_point(current_layer->verts, current_layer->vert_count, mesh->center_point, dscale);
+            } else if(rot.x || rot.y) {
+                rotate_verts_around_center_point(current_layer->verts, current_layer->vert_count, mesh->center_point, rot);
+            } else if(drag.x || drag.y) {
+                FORI(0, current_layer->vert_count) {
+                    current_layer->verts[i] += drag;
                 }
             }
         } break;
@@ -871,6 +1072,40 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                     }
                 }
             }
+            
+            f32 dscale = 0.0f;
+            v2 rot = V2();
+            v2 drag = V2();
+            scale_rot_drag_interact(in, &cursor_p, &should_draw_cursor, &triangulate_layer, &dscale, &rot, &drag);
+            
+            if(dscale) {
+                FORI_NAMED(layer_index, 0, mesh->layer_count) {
+                    Edit_Mesh_Layer *layer = &mesh->layers[layer_index];
+                    
+                    scale_verts_from_center_point(layer->verts, layer->vert_count, mesh->center_point, dscale);
+                }
+                
+                triangulate_layer = true;
+                triangulate_the_whole_mesh = true;
+            } else if(rot.x || rot.y) {
+                FORI_NAMED(layer_index, 0, mesh->layer_count) {
+                    Edit_Mesh_Layer *layer = &mesh->layers[layer_index];
+                    
+                    rotate_verts_around_center_point(layer->verts, layer->vert_count, mesh->center_point, rot);
+                }
+                
+                triangulate_layer = true;
+                triangulate_the_whole_mesh = true;
+            } else if(drag.x || drag.y) {
+                FORI_NAMED(layer_index, 0, mesh->layer_count) {
+                    Edit_Mesh_Layer *layer = &mesh->layers[layer_index];
+                    FORI_NAMED(vert_index, 0, layer->vert_count) {
+                        layer->verts[vert_index] += drag;
+                    }
+                }
+                triangulate_layer = true;
+                triangulate_the_whole_mesh = true;
+            }
         } break;
         
         default: {
@@ -908,13 +1143,23 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
         s32 index_count = 0;
         
         if(vert_count >= 3) {
-            { // Triangulating the modified layer.
+            s32 start_layer_index = mesh->current_layer;
+            s32 end_layer_index = mesh->current_layer + 1;
+            if(triangulate_the_whole_mesh) {
+                start_layer_index = 0;
+                end_layer_index = mesh->layer_count;
+            }
+            
+            FORI_NAMED(layer_index, start_layer_index, end_layer_index) {
+                // Triangulating the modified layer.
                 SCOPE_MEMORY(&temporary_memory);
-                v2 *scratch_verts = push_array(&temporary_memory, v2, current_layer->vert_count);
-                u16 *scratch_indices = push_array(&temporary_memory, u16, index_count_or_zero(current_layer->vert_count));
+                Edit_Mesh_Layer *layer = &mesh->layers[layer_index];
                 
-                FORI(0, current_layer->vert_count) {
-                    scratch_verts[i] = current_layer->verts[i];
+                v2 *scratch_verts = push_array(&temporary_memory, v2, layer->vert_count);
+                u16 *scratch_indices = push_array(&temporary_memory, u16, index_count_or_zero(layer->vert_count));
+                
+                FORI(0, layer->vert_count) {
+                    scratch_verts[i] = layer->verts[i];
                     scratch_indices[i] = CAST(u16, i);
                 }
                 
@@ -952,9 +1197,9 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                         }
                         
                         if(ear) {
-                            current_layer->indices[index_count + 0] = scratch_indices[a_index];
-                            current_layer->indices[index_count + 1] = scratch_indices[b_index];
-                            current_layer->indices[index_count + 2] = scratch_indices[i];
+                            layer->indices[index_count + 0] = scratch_indices[a_index];
+                            layer->indices[index_count + 1] = scratch_indices[b_index];
+                            layer->indices[index_count + 2] = scratch_indices[i];
                             index_count += 3;
                             
                             FORI_NAMED(shift_index, b_index, vert_count - 1) {
@@ -971,9 +1216,9 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                     }
                 }
                 
-                current_layer->indices[index_count + 0] = scratch_indices[0];
-                current_layer->indices[index_count + 1] = scratch_indices[1];
-                current_layer->indices[index_count + 2] = scratch_indices[2];
+                layer->indices[index_count + 0] = scratch_indices[0];
+                layer->indices[index_count + 1] = scratch_indices[1];
+                layer->indices[index_count + 2] = scratch_indices[2];
                 index_count += 3;
             }
         }
@@ -1023,7 +1268,12 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
     //
     
     {
-        Mesh_Instance instance = {mesh->output.default_offset, mesh->output.default_scale, mesh->output.default_rot, V4(1.0f)};
+        Mesh_Instance instance;
+        instance.offset = mesh->output.default_offset;
+        instance.scale = mesh->output.default_scale;
+        instance.rot = mesh->output.default_rot;
+        instance.color = V4(1.0f);
+        
         render_mesh(command_queue, mesh->output.handle, &instance);
     }
     
@@ -1039,10 +1289,25 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                     highlight.rot = V2(1.0f, 0.0f);
                     highlight.color = (layer_index == 0) ? V4(1.0f, 1.0f, 0.0f, 1.0f) : V4(0.5f, 0.5f, 0.5f, 1.0f);
                     
-                    render_quad(command_queue, &highlight);
+                    render_quad(renderer, command_queue, &highlight);
                 }
             }
         }
+    }
+    
+    { // Center point.
+        Mesh_Instance instance = {};
+        instance.offset = mesh->center_point;
+        instance.color = V4(0.0f, 0.0f, 0.0f, 1.0f);
+        instance.scale = V2(0.15f);
+        instance.rot = V2(1.0f, 0.0f);
+        
+        render_quad(renderer, command_queue, &instance);
+        
+        instance.scale *= 0.5f;
+        instance.color = V4(1.0f);
+        
+        render_quad(renderer, command_queue, &instance);
     }
     
     if(hovered_vert != -1) {
@@ -1053,7 +1318,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
         hover_highlight.rot = V2(1.0f, 0.0f);
         hover_highlight.color = V4(0.0f, 1.0f, 0.0f, 1.0f);
         
-        render_quad(command_queue, &hover_highlight);
+        render_quad(renderer, command_queue, &hover_highlight);
     } else if((hover.selection == EDGE) && (interaction->selection == NONE)) {
         Mesh_Instance hover_highlight = {};
         
@@ -1066,7 +1331,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
         hover_highlight.rot = v2_normalize(b - a);
         hover_highlight.color = V4(0.0f, 1.0f, 0.0f, 1.0f);
         
-        render_quad(command_queue, &hover_highlight);
+        render_quad(renderer, command_queue, &hover_highlight);
     }
     
     //
@@ -1086,7 +1351,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             instance.color.g = 1.0f;
         }
         
-        render_quad(command_queue, &instance);
+        render_quad(renderer, command_queue, &instance);
         
         instance.offset.x += instance.scale.x + margin;
         if(editor->snap_to_edge) {
@@ -1097,17 +1362,17 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             instance.color.g = 0.0f;
         }
         
-        render_quad(command_queue, &instance);
+        render_quad(renderer, command_queue, &instance);
     }
     
     { // Color picker
         Mesh_Instance instance = make_mesh_instance(layout[color_picker], V4(1.0f, 1.0f, 1.0f, 1.0f));
-        render_mesh(command_queue, RESERVED_MESH_HANDLE::COLOR_PICKER, &instance);
+        render_mesh(command_queue, GET_MESH_HANDLE(renderer, color_picker), &instance);
     }
     
     { // Hue picker
         Mesh_Instance instance = make_mesh_instance(layout[hue_picker], V4(1.0f));
-        render_mesh(command_queue, RESERVED_MESH_HANDLE::HUE_PICKER, &instance);
+        render_mesh(command_queue, GET_MESH_HANDLE(renderer, hue_picker), &instance);
     }
     
     v4 colors[] = {
@@ -1143,7 +1408,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             }
             instance.color = colors[color_index];
             
-            render_quad(command_queue, &instance);
+            render_quad(renderer, command_queue, &instance);
         }
     }
     
@@ -1181,7 +1446,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                 }
                 instance.color = colors[color_index];
                 
-                render_quad(command_queue, &instance);
+                render_quad(renderer, command_queue, &instance);
             }
         }
     }
@@ -1191,22 +1456,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
     //
     
     if(should_draw_cursor) {
-        v4 layer_color = mesh->layers[mesh->current_layer].color;
-        Mesh_Instance cursor = {};
-        
-        cursor.offset = cursor_p;
-        cursor.scale = V2(0.1f);
-        cursor.rot = v2_angle_to_complex(TAU * 0.125f);
-        cursor.color = V4(1.0f - layer_color.r, 1.0f - layer_color.g, 1.0f - layer_color.b, layer_color.a);
-        
-        if(interaction->selection != VERTEX) {
-            render_quad(command_queue, &cursor);
-            
-            cursor.color = layer_color;
-        }
-        
-        cursor.scale *= 0.35f;
-        render_quad(command_queue, &cursor);
+        render_cursor(renderer, command_queue, cursor_p, mesh->layers[mesh->current_layer].color, interaction->selection != VERTEX);
     }
     
     in->xhairp = world_space_offset_to_unit_scale(cursor_p, 1.0f);

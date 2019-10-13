@@ -1,6 +1,6 @@
 
 static inline f32 midi_key_to_frequency(u8 key) {
-    f32 result = 440.0f * f_pow2((CAST(f32, key) - 69.0f) / 12.0f);
+    f32 result = 440.0f * f_pow2((CAST(f32, key) - 69.0f) * (1.0f / 12.0f));
     return result;
 }
 
@@ -13,72 +13,74 @@ static void init_synth(Synth* synth, Memory_Block* memory_block, u8 core_count, 
     synth->mixing_buffers   = push_array(memory_block, f32*, channel_count);
     synth->output_buffer    = push_array(memory_block, s16,      output_hz_s);
     
-    string file = os_platform.read_entire_file(STRING("W:\\genesis\\assets\\test.synth_input"));
+    string file = os_platform.read_entire_file(STRING("W:\\genesis\\assets\\latest.synth_input"));
     
-    auto header = CAST(Synth_Input_Header*, file.data);
-    ASSERT(header->version == SYNTH_INPUT_VERSION);
-    
-    f32 input_hz = CAST(f32, header->ticks_per_second);
-    f32 output_hz = CAST(f32, synth->output_hz);
-    f32 ticks_to_samples = output_hz / input_hz;
-    
-    auto input_track = CAST(Synth_Input_Track*, header + 1);
-    
-    FORI(0, 1) { //header->track_count) {
-        // @Hack
-        s16 instrument_index = synth->instrument_count++;
+    if(file.length) {
+        auto header = CAST(Synth_Input_Header*, file.data);
+        ASSERT(header->version == SYNTH_INPUT_VERSION);
         
-        Synth_Track synth_track = {};
-        synth_track.instrument = instrument_index;
-        synth_track.note_count = input_track->note_count;
-        synth_track.notes = push_array(memory_block, Synth_Note, synth_track.note_count);
+        f32 input_hz = CAST(f32, header->ticks_per_second);
+        f32 output_hz = CAST(f32, synth->output_hz);
+        f32 ticks_to_samples = output_hz / input_hz;
         
-        auto input_notes = CAST(Synth_Input_Note*, input_track + 1);
+        auto input_track = CAST(Synth_Input_Track*, header + 1);
         
-        FORI_NAMED(note_index, 0, input_track->note_count) {
-            auto input_note = &input_notes[note_index];
-            auto synth_note = &synth_track.notes[note_index];
+        FORI(0, 1) { //header->track_count) {
+            // @Hack
+            s16 instrument_index = synth->instrument_count++;
             
-            synth_note->start_sample = f_round_to_s(CAST(f32, input_note->start) * ticks_to_samples);
-            // We add -1 because sequential notes overlap.
-            synth_note->end_sample = f_round_to_s(CAST(f32, input_note->start + input_note->duration) * ticks_to_samples) - 1;
-            synth_note->wavelength = output_hz / midi_key_to_frequency(input_note->key);
-            synth_note->velocity = CAST(f32, input_note->velocity);
+            Synth_Track synth_track = {};
+            synth_track.instrument = instrument_index;
+            synth_track.note_count = input_track->note_count;
+            synth_track.notes = push_array(memory_block, Synth_Note, synth_track.note_count);
+            
+            auto input_notes = CAST(Synth_Input_Note*, input_track + 1);
+            
+            FORI_NAMED(note_index, 0, input_track->note_count) {
+                auto input_note = &input_notes[note_index];
+                auto synth_note = &synth_track.notes[note_index];
+                
+                synth_note->start_sample = f_round_to_s(CAST(f32, input_note->start) * ticks_to_samples);
+                // We add -1 because sequential notes overlap.
+                synth_note->end_sample = f_round_to_s(CAST(f32, input_note->start + input_note->duration) * ticks_to_samples) - 1;
+                synth_note->wavelength = output_hz / midi_key_to_frequency(input_note->midi_key);
+                synth_note->velocity = CAST(f32, input_note->velocity);
+            }
+            
+            input_track = CAST(Synth_Input_Track*, input_notes + input_track->note_count);
+            
+            // @Hardcoded
+            Synth_Instrument instrument = {};
+            
+            instrument.oscillators.mix[0] = 1.0f;
+            instrument.oscillators.count = 1;
+            instrument.amplitude = 500.0f;
+            switch(instrument_index) {
+                case 0: {
+                    instrument.oscillators.waveforms[0] = SYNTH_WAVEFORM::TRIANGLE;
+                } break;
+                
+                case 1: {
+                    instrument.oscillators.waveforms[0] = SYNTH_WAVEFORM::SAWTOOTH;
+                } break;
+                
+                case 2: {
+                    instrument.oscillators.waveforms[0] = SYNTH_WAVEFORM::PULSE;
+                } break;
+            }
+            
+            f32 attack_t = 0.015f;
+            f32 decay_t = 0.030f;
+            f32 release_t = 0.035f;
+            
+            instrument.attack_samples = f_round_to_s(attack_t * synth->output_hz);
+            instrument.decay_samples = f_round_to_s(decay_t * synth->output_hz);
+            instrument.sustain_factor = 0.5f;
+            instrument.release_samples = f_round_to_s(release_t * synth->output_hz);
+            
+            synth->instruments[instrument_index] = instrument;
+            synth->tracks[synth->track_count++] = synth_track;
         }
-        
-        input_track = CAST(Synth_Input_Track*, input_notes + input_track->note_count);
-        
-        // @Hardcoded
-        Synth_Instrument instrument = {};
-        
-        instrument.oscillators.mix[0] = 1.0f;
-        instrument.oscillators.count = 1;
-        instrument.amplitude = 500.0f;
-        switch(instrument_index) {
-            case 0: {
-                instrument.oscillators.waveforms[0] = SYNTH_WAVEFORM::TRIANGLE;
-            } break;
-            
-            case 1: {
-                instrument.oscillators.waveforms[0] = SYNTH_WAVEFORM::SAWTOOTH;
-            } break;
-            
-            case 2: {
-                instrument.oscillators.waveforms[0] = SYNTH_WAVEFORM::PULSE;
-            } break;
-        }
-        
-        f32 attack_t = 0.015f;
-        f32 decay_t = 0.030f;
-        f32 release_t = 0.035f;
-        
-        instrument.attack_samples = f_round_to_s(attack_t * synth->output_hz);
-        instrument.decay_samples = f_round_to_s(decay_t * synth->output_hz);
-        instrument.sustain_factor = 0.5f;
-        instrument.release_samples = f_round_to_s(release_t * synth->output_hz);
-        
-        synth->instruments[instrument_index] = instrument;
-        synth->tracks[synth->track_count++] = synth_track;
     }
 }
 
@@ -278,7 +280,6 @@ s16* Implicit_Context::update_synth(Synth* synth, const s32 samples_to_update) {
                 
                 switch(waveform) {
                     
-#if 1
 #define GENERATE_WAVEFORM_CASE(waveform, proc) \
                     case waveform: {\
                         s32 from_x = start_offset_clipped;\
@@ -302,23 +303,6 @@ s16* Implicit_Context::update_synth(Synth* synth, const s32 samples_to_update) {
                     GENERATE_WAVEFORM_CASE(SYNTH_WAVEFORM::SINE, generate_sine);
                     
 #undef GENERATE_WAVEFORM_CASE
-#else
-                    case SYNTH_WAVEFORM::TRIANGLE: {
-                        s32 from_x = start_offset_clipped;
-                        
-                        FORI(first_lerp, last_lerp + 1) {
-                            s32 to_x = lerp_points_x[i];
-                            f32 to_y = lerp_points_y[i];
-                            
-                            if(from_x != to_x) {
-                                generate_triangle(&state->oscillators[oscillator_index], to_x - from_x, note->wavelength, from_y, to_y, synth->temporary_buffer + from_x);
-                            }
-                            
-                            from_x = to_x;
-                            from_y = to_y;
-                        }
-                    } break;
-#endif
                     
                     default: UNHANDLED;
                     

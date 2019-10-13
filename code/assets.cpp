@@ -104,7 +104,7 @@ static inline s32 midi_decodemod_and_advance(u8 **at) {
 //
 // Internal assets
 //
-
+#if USE_DATAPACK
 static inline string read_entire_asset(Memory_Block *block, Datapack_Handle *pack, s32 asset_uid) {
     Asset_Metadata metadata = get_asset_metadata(pack, asset_uid);
     string result = push_string(block, metadata.size);
@@ -112,3 +112,12 @@ static inline string read_entire_asset(Memory_Block *block, Datapack_Handle *pac
     
     return result;
 }
+#define READ_ENTIRE_ASSET(block, pack, asset, category) read_entire_asset(block, pack, ASSET_UID_##asset##_##category)
+#else
+static inline string read_entire_asset(Memory_Block *block, Datapack_Handle *pack, string name) {
+    string result = os_platform.read_entire_file(name);
+    
+    return result;
+}
+#define READ_ENTIRE_ASSET(block, pack, asset, category) read_entire_asset(block, pack, STRING(#category"/"#asset"."#category))
+#endif

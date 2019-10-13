@@ -2,27 +2,15 @@
 //
 // CURRENT:
 //
-Mesh editor:
-- Functionality:
--   Actually one mesh per mesh :NeedToGenerateMultipleOutputMeshes
--   Hide non-selected layers.
--   Disallow placing clockwise verts.
-- Interface:
--   Display each mesh in its corresponding button in the picker
--   Display each layer in its corresponding button in the picker
--   Add "+" symbols to "add" buttons in the picker
-
 Graphics:
-- Enable depth testing.
-
-- @Speed: Make list handles be straight pointers to the command lists.
-- (How does sRGB work in d3d12?)
+- Replace game graphics with meshes.
+- Replace fonts with meshes.
+- Add Z to Render_Vertex.
 
 Audio:
 - Instruments: Either make our own and have some way to select them for each MIDI track, or embed them into the Synth_Input.
 - Note velocity.
 - SIMD waveform generators.
-
 
 //
 // ISSUES:
@@ -57,11 +45,24 @@ Controls:
 //
 // ENGINE:
 //
-Gracefully handle different amounts of output audio channels.
 
 Differenciate between GENESIS_DEV and a new GENESIS_DEBUG flag.
 
-Read Synth1 config files???
+Mesh editor:
+- Functionality:
+-   Animations???
+-   Actually one mesh per mesh :NeedToGenerateMultipleOutputMeshes
+-   Hide non-selected layers.
+-   Disallow placing clockwise verts.
+- Interface:
+-   Display each mesh in its corresponding button in the picker
+-   Display each layer in its corresponding button in the picker
+-   Add "+" symbols to "add" buttons in the picker
+
+Datapack:
+- Make a new version with our new asset formats.
+- Read Synth1 config files???
+- Pack multiple meshes.
 
 UI:
 - Automatic layouts for widget lists, etc.
@@ -73,6 +74,7 @@ Profiling:
 - Compute both "total" and "self" times.
 
 Audio:
+- Gracefully handle different amounts of output audio channels.
 - Allow sound cutoffs.
 - Music crossfading.
 
