@@ -632,7 +632,7 @@ s16 *Implicit_Context::update_audio(Audio_Info *audio, const s32 samples_to_play
             }
         }
         
-        s32 end_samples_played = samples_played + ceil_s(samples_to_play_f / pitch);
+        s32 end_samples_played = samples_played + f_ceil_s(samples_to_play_f / pitch);
         s32 write_offset = 0;
         u32 pages = audio->plays.audio_pages[i];
         s16 *page = audio->audio_pages[pages >> 16];

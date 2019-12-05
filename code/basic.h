@@ -231,7 +231,7 @@ extern "C" {
         }
         char *m8 = (char *)m64;
         for(i = 0; i < bytes_left; ++i) {
-            m8[i] = (value >> (56 - (8 * i))) & 0xFF;
+            m8[i] = (value64 >> (i << 3)) & 0xFF;
         }
         return mem;
     }

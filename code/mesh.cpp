@@ -428,6 +428,7 @@ void Implicit_Context::export_mesh(Edit_Mesh *mesh) {
             s32 running_vert_count = 0;
             s32 running_index_count = 0;
             
+            f32 max_distance_from_center_point = 0.0f;
             FORI(0, layer_count) {
                 Edit_Mesh_Layer *layer = &mesh->layers[i];
                 u16 vert_count = layer->vert_count;
@@ -437,7 +438,14 @@ void Implicit_Context::export_mesh(Edit_Mesh *mesh) {
                     FORI_NAMED(vert_index, 0, vert_count) {
                         Render_Vertex *vert = &verts[running_vert_count + vert_index];
                         
-                        vert->p = layer->verts[vert_index] - mesh->center_point;
+                        v2 p = layer->verts[vert_index] - mesh->center_point;
+                        
+                        f32 dist_sq = v2_length_sq(p);
+                        if(dist_sq > max_distance_from_center_point) {
+                            max_distance_from_center_point = dist_sq;
+                        }
+                        
+                        vert->p = p;
                         vert->color = layer->color;
                     }
                     
@@ -447,6 +455,17 @@ void Implicit_Context::export_mesh(Edit_Mesh *mesh) {
                     
                     running_vert_count += vert_count;
                     running_index_count += index_count;
+                }
+            }
+            
+            // Normalize verts to a -0.5 to 0.5 box.
+            if(max_distance_from_center_point) {
+                max_distance_from_center_point = f_sqrt(max_distance_from_center_point);
+                
+                const f32 normalize_factor = 1.0f / (max_distance_from_center_point * 2.0f);
+                
+                FORI_NAMED(vert_index, 0, vert_total) {
+                    verts[vert_index].p *= normalize_factor;
                 }
             }
             
@@ -628,6 +647,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             export_mesh(mesh);
         }
     } else {
+        // Changing layer order.
         if(BUTTON_PRESSED(in, up)) {
             s32 swap0 = mesh->current_layer;
             s32 swap1 = swap0 + 1;
@@ -941,7 +961,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                     f32 relative_cursor_height = cursor_p.y - picker_bottom;
                     f32 item_height = picker_height / MAX_LAYERS_PER_MESH;
                     
-                    s32 picked_index = CAST(s32, relative_cursor_height / item_height);
+                    s32 picked_index = f_floor_s(relative_cursor_height / item_height);
                     if(picked_index == current_layer_index) {
                         current_layer->color = interaction->color_picker.layer_color_before;
                     } else if(picked_index < mesh->layer_count) {
@@ -983,7 +1003,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             } else {
                 f32 picker_height = picker.top - picker.bottom;
                 f32 item_height = picker_height / (ARRAY_LENGTH(hues) - 1);
-                s32 item_index = CAST(s32, (cursor_p.y - picker.bottom) / item_height);
+                s32 item_index = f_floor_s((cursor_p.y - picker.bottom) / item_height);
                 
                 f32 item_bottom = picker.bottom + item_height * item_index;
                 f32 item_top = item_bottom + item_height;
@@ -1006,7 +1026,7 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
                 const f32 relative_cursor_height = cursor_p.y - picker_bottom;
                 const f32 item_height = picker_height / MAX_LAYERS_PER_MESH;
                 
-                const s32 picked_index = CAST(s32, relative_cursor_height / item_height);
+                const s32 picked_index = f_floor_s(relative_cursor_height / item_height);
                 
                 if(picked_index >= mesh->layer_count) {
                     mesh->layer_count = CAST(u16, picked_index + 1);
@@ -1044,8 +1064,8 @@ void Implicit_Context::mesh_update(Mesh_Editor *editor, Renderer *renderer, Inpu
             v2 relative_cursor_p = cursor_p - picker_min;
             v2 item_dim = V2(picker_dim.x / MESHES_IN_PICKER, picker_dim.y / CAST(f32, picker_height));
             
-            s32 picked_x = CAST(s32, relative_cursor_p.x / item_dim.x);
-            s32 picked_y = picker_height - 1 - CAST(s32, relative_cursor_p.y / item_dim.y);
+            s32 picked_x = f_floor_s(relative_cursor_p.x / item_dim.x);
+            s32 picked_y = picker_height - 1 - f_floor_s(relative_cursor_p.y / item_dim.y);
             s32 picked_index = picked_y * picker_height + picked_x;
             if(picked_y > 0) {
                 // We ignore the expand button to find the mesh index.

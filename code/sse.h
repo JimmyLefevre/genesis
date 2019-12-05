@@ -13,6 +13,16 @@
 #define ATOMIC_INC64(value) _InterlockedIncrement64((value))
 #endif
 
+union simd128 {
+    __m128 as_m128;
+    __m128i as_m128i;
+    __m128d as_m128d;
+    f32 as_f32[4];
+    f64 as_f64[2];
+    s32 as_s32[4];
+    s64 as_s64[2];
+};
+
 inline void xorshift_x4(__m128i *state) {
     __m128i temp0 = _mm_slli_epi32(*state, 13);
     __m128i temp1 = _mm_srli_epi32(temp0, 17);
@@ -36,4 +46,94 @@ inline __m128 xorshift_tpdf_x4(__m128i *state0, __m128i *state1, const __m128 in
     // If we truncate instead of rounding, we should generate -0.5->1.5 noise instead.
     __m128 tpdf = _mm_mul_ps(sum, inv_range);
     return tpdf;
+}
+
+static inline __m128i f_round_s_x4(__m128 f) {
+    __m128i result = _mm_cvtps_epi32(f);
+    return result;
+}
+static inline __m128 f_ceil_f_x4(__m128 a) {
+    __m128 result = _mm_ceil_ps(a);
+    return result;
+}
+static inline __m128 f_floor_f_x4(__m128 a) {
+    __m128 result = _mm_floor_ps(a);
+    return result;
+}
+static inline __m128 f_round_f_x4(__m128 a) {
+    __m128 result = _mm_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+    return result;
+}
+static inline __m128i f64_round_s_x2(__m128d f) {
+    __m128i result = _mm_cvtpd_epi32(f);
+    return result;
+}
+static inline __m128d f64_round_f64_x2(__m128d f) {
+    __m128d result = _mm_round_pd(f, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+    return result;
+}
+static inline __m128d f64_floor_f64_x2(__m128d f) {
+    __m128d result = _mm_floor_pd(f);
+    return result;
+}
+static inline __m128d f64_ceil_f64_x2(__m128d f) {
+    __m128d result = _mm_ceil_pd(f);
+    return result;
+}
+
+static inline f32 f_round_f(f32 a) {
+    simd128 result;
+    
+    result.as_m128 = f_round_f_x4(_mm_load_ss(&a));
+    
+    return result.as_f32[0];
+}
+static inline f32 f_ceil_f(f32 a) {
+    simd128 result;
+    
+    result.as_m128 = f_ceil_f_x4(_mm_load_ss(&a));
+    
+    return result.as_f32[0];
+}
+static inline f32 f_floor_f(f32 a) {
+    simd128 result;
+    
+    result.as_m128 = f_floor_f_x4(_mm_load_ss(&a));
+    
+    return result.as_f32[0];
+}
+static inline s32 f_round_s(f32 a) {
+    simd128 result;
+    
+    result.as_m128i = f_round_s_x4(_mm_load_ss(&a));
+    
+    return result.as_s32[0];
+}
+static inline s32 f64_round_s(f64 a) {
+    simd128 result;
+    
+    result.as_m128i = f64_round_s_x2(_mm_load_sd(&a));
+    
+    return result.as_s32[0];
+}
+static inline f64 f64_round_f64(f64 a) {
+    simd128 result;
+    
+    result.as_m128d = f64_round_f64_x2(_mm_load_sd(&a));
+    
+    return result.as_f64[0];
+}
+static inline f64 f64_floor_f64(f64 a) {
+    simd128 result;
+    
+    result.as_m128d = f64_floor_f64_x2(_mm_load_sd(&a));
+    
+    return result.as_f64[0];
+}
+static inline f64 f64_ceil_f64(f64 a) {
+    simd128 result;
+    
+    result.as_m128d = f64_ceil_f64_x2(_mm_load_sd(&a));
+    
+    return result.as_f64[0];
 }

@@ -1,5 +1,4 @@
 
-#include <intrin.h>
 #include <windows.h>
 #include <dsound.h>
 
@@ -11,6 +10,7 @@
 #include <d3dcompiler.h>
 
 #include      "basic.h"
+#include        "sse.h"
 #include       "keys.h"
 #include       "math.h"
 #include      "input.h"
@@ -28,6 +28,7 @@
 #define UNICODE
 #define _UNICODE
 
+
 //
 // CRT bootstrapping
 //
@@ -37,8 +38,8 @@ extern "C" {
     void wWinMainCRTStartup() {
         HINSTANCE instance = GetModuleHandleW(0);
         ASSERT_TYPE_SIZES;
+        
         int result = wWinMain(instance, 0, 0, 0);
-        ExitProcess(result);
     }
     
     // shlwapi.h:
@@ -788,7 +789,7 @@ s32 WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                 }
                 
                 // Updating the window size:
-                if(program_state.should_render || 1) { // If we're minimized, don't bother.
+                if(program_state.should_render) { // If we're minimized, don't bother.
                     if(win32.currently_fullscreen != program_state.should_be_fullscreen) {
                         d3d_set_fullscreen(program_state.should_be_fullscreen);
                         
@@ -846,8 +847,6 @@ s32 WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                     g_interface.run_frame(main_thread_context, &game_block, &program_state);
                 }
                 
-                // d3d_draw_debug_frame();
-                
                 if(win32.cursor_is_being_captured) {
                     center_cursor(wnd_handle);
                 }
@@ -858,6 +857,13 @@ s32 WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                     QueryPerformanceCounter(&frame_end_time);
                     f64 frame_ms = (((f64)(frame_end_time.QuadPart - frame_start_time.QuadPart) * 1000.0) *
                                     win32.inv_cpu_freq);
+                    
+#if 0
+                    // @Hardcoded milliseconds per frame
+                    if(CAST(u32, frame_ms) < 16) {
+                        Sleep(16 - CAST(u32, frame_ms));
+                    }
+#endif
                     
                     QueryPerformanceCounter(&frame_end_time);
                     frame_ms = (((f64)(frame_end_time.QuadPart - frame_start_time.QuadPart) * 1000.0) *

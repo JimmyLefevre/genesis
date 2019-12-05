@@ -68,12 +68,6 @@ static inline v2 world_space_offset_to_unit_scale(v2 p, f32 camera_zoom) {
     return result;
 }
 
-static inline v2 rotate_around(v2 p, v2 center, v2 rotation) {
-    v2 rel = p - center;
-    v2 result = v2_complex_prod(rel, rotation);
-    return (p + result);
-}
-
 static void fill_poly(const v2s * const pts, u32 pt_count, u8 * const texture, u32 tex_width, u8 value, s32 ymin, s32 ymax) {
     v2s a = pts[0];
     v2s b;
@@ -191,9 +185,34 @@ static void fill_poly(const v2s * const pts, u32 pt_count, u8 * const texture, u
     }
 }
 
-inline void init_bresenham(s32 a_x, s32 a_y, s32 b_x, s32 b_y, s32 *out_at_x, s32 *out_at_y,
-                           s32 *out_end_x, s32 *out_end_y, s32 *out_dx, s32 *out_dy, s32 *out_xinc,
-                           s32 *out_yinc, s32 *out_deviation) {
+static inline void update_player_dp(const f32 input_dp, f32 * const _dp, const f32 accel, const f32 max_speed, const f32 dt32) {
+    f32 dp = *_dp;
+    
+    if(!input_dp) {
+        const f32 absdp = f_abs(dp);
+        f32 decay = (0.2f * dt32) / absdp;
+        
+        if(decay < 0.1f) {
+            decay = 0.1f;
+        } else if(decay > 1.0f) {
+            decay = 1.0f;
+        }
+        
+        dp *= 1.0f - decay;
+    }
+    dp += input_dp * accel;
+    dp = f_symmetrical_clamp(dp, max_speed);
+    
+    *_dp = dp;
+}
+
+//
+// Some collision stuff
+//
+
+static inline void init_bresenham(s32 a_x, s32 a_y, s32 b_x, s32 b_y, s32 *out_at_x, s32 *out_at_y,
+                                  s32 *out_end_x, s32 *out_end_y, s32 *out_dx, s32 *out_dy, s32 *out_xinc,
+                                  s32 *out_yinc, s32 *out_deviation) {
     s32 at_x, at_y, end_x, end_y;
     s32 dx = b_x - a_x;
     s32 dy = b_y - a_y;
@@ -227,7 +246,7 @@ inline void init_bresenham(s32 a_x, s32 a_y, s32 b_x, s32 b_y, s32 *out_at_x, s3
 }
 
 // dx is assumed positive, dy is assumed negative.
-inline void do_bresenham(s32 *at_x, s32 *at_y, s32 *deviation, s32 dx, s32 dy, s32 xinc, s32 yinc) {
+static inline void do_bresenham(s32 *at_x, s32 *at_y, s32 *deviation, s32 dx, s32 dy, s32 xinc, s32 yinc) {
     // Doubling gives us the deviation for the next cell.
     s32 doubled_deviation = 2 * *deviation;
     if(doubled_deviation >= dy) {
@@ -240,28 +259,7 @@ inline void do_bresenham(s32 *at_x, s32 *at_y, s32 *deviation, s32 dx, s32 dy, s
     }
 }
 
-inline void update_player_dp(const f32 input_dp, f32 * const _dp, const f32 accel, const f32 max_speed, const f32 dt32) {
-    f32 dp = *_dp;
-    
-    if(!input_dp) {
-        const f32 absdp = f_abs(dp);
-        f32 decay = (0.2f * dt32) / absdp;
-        
-        if(decay < 0.1f) {
-            decay = 0.1f;
-        } else if(decay > 1.0f) {
-            decay = 1.0f;
-        }
-        
-        dp *= 1.0f - decay;
-    }
-    dp += input_dp * accel;
-    dp = f_symmetrical_clamp(dp, max_speed);
-    
-    *_dp = dp;
-}
-
-inline void ray_to_outer_box_intersect(v2 ray0, v2 dir, f32 left, f32 bottom, f32 right, f32 top, v2 *intersect) {
+static inline void ray_to_outer_box_intersect(v2 ray0, v2 dir, f32 left, f32 bottom, f32 right, f32 top, v2 *intersect) {
     f32 tx, ty;
     
     if(dir.x <= 0.0f) {
@@ -278,7 +276,7 @@ inline void ray_to_outer_box_intersect(v2 ray0, v2 dir, f32 left, f32 bottom, f3
     *intersect = ray0 + dir * f_min(tx, ty);
 }
 
-inline bool aabb_aabb_overlap(v2 pa, v2 halfdima, v2 pb, v2 halfdimb) {
+static inline bool aabb_aabb_overlap(v2 pa, v2 halfdima, v2 pb, v2 halfdimb) {
     v2 minkowski_p = pa - pb;
     v2 minkowski_halfdim = halfdima + halfdimb;
     
@@ -291,7 +289,7 @@ inline bool aabb_aabb_overlap(v2 pa, v2 halfdima, v2 pb, v2 halfdimb) {
             (bottom < 0.0f) && (top > 0.0f));
 }
 
-inline v2 aabb_aabb_response(v2 pa, v2 halfdima, v2 pb, v2 halfdimb) {
+static inline v2 aabb_aabb_response(v2 pa, v2 halfdima, v2 pb, v2 halfdimb) {
     f32 flipy = 1.0f;
     f32 flipx = 1.0f;
     f32 disty = pa.y - pb.y;
@@ -320,7 +318,17 @@ inline v2 aabb_aabb_response(v2 pa, v2 halfdima, v2 pb, v2 halfdimb) {
     }
 }
 
-inline v2 obb_closest(const v2 p, const v2 halfdim, const v2 rotation, const v2 to) {
+static inline v2 edge_closest(const v2 a, const v2 b, const v2 p) {
+    const v2 ab = b - a;
+    const v2 ap = p - a;
+    const f32 abab = v2_inner(ab, ab);
+    const f32 abap = v2_inner(ab, ap);
+    const f32 t = f_clamp(abap / abab, 0.0f, 1.0f);
+    const v2 closest = a + ab * t;
+    return closest;
+}
+
+static inline v2 obb_closest(const v2 p, const v2 halfdim, const v2 rotation, const v2 to) {
     const v2 rot_perp = v2_perp(rotation);
     const v2 dp = to - p;
     f32 dotx = v2_inner(dp, rotation);
@@ -331,22 +339,34 @@ inline v2 obb_closest(const v2 p, const v2 halfdim, const v2 rotation, const v2 
     return closest;
 }
 
-inline bool disk_obb_overlap_radius_squared(const v2 disk_p, const f32 radius_sq, const v2 obb_p, const v2 halfdim, const v2 rotation) {
+static inline bool disk_obb_overlap_radius_squared(const v2 disk_p, const f32 radius_sq, const v2 obb_p, const v2 halfdim, const v2 rotation) {
     const v2 closest = obb_closest(obb_p, halfdim, rotation, disk_p);
     const f32 dist_sq = v2_length_sq(disk_p - closest);
     return (dist_sq < radius_sq);
 }
 
-inline bool disk_obb_overlap(const v2 disk_p, const f32 radius, const v2 obb_p, const v2 halfdim, const v2 rotation) {
+static inline bool disk_obb_overlap(const v2 disk_p, const f32 radius, const v2 obb_p, const v2 halfdim, const v2 rotation) {
     return disk_obb_overlap_radius_squared(disk_p, radius * radius, obb_p, halfdim, rotation);
 }
 
-inline bool disk_disk_overlap(const v2 pa, const f32 radiusa, const v2 pb, const f32 radiusb) {
+static inline bool disk_disk_overlap(const v2 pa, const f32 radiusa, const v2 pb, const f32 radiusb) {
     const f32 dist_sq = v2_length_sq(pa - pb);
     const f32 minkowski_rad = radiusa + radiusb;
     const f32 radius_sq = minkowski_rad * minkowski_rad;
     return (dist_sq < radius_sq);
 }
+
+static inline bool disk_capsule_overlap(const v2 p, const f32 disk_radius, const v2 a, const v2 b, const f32 capsule_radius) {
+    const v2 closest = edge_closest(a, b, p);
+    const f32 dist_sq = v2_length_sq(p - closest);
+    const f32 minkowski_rad = disk_radius + capsule_radius;
+    const f32 minkowski_rad_sq = minkowski_rad * minkowski_rad;
+    return (dist_sq < minkowski_rad_sq);
+}
+
+//
+//
+//
 
 static void update_ballistic_dp(f32 *_dp, Input in, u32 minus_button, u32 plus_button, const f32 dt32,
                                 const f32 accel, const f32 decay_max, const f32 decay_factor) {
@@ -376,208 +396,403 @@ static void update_ballistic_dp(f32 *_dp, Input in, u32 minus_button, u32 plus_b
 
 static void mark_entity_for_removal(Game *g, u8 type, s32 index) {
     // Checking that we don't mark the same entity multiple times. @Speed?
-    FORI(0, g->removals.count) {
-        if((g->removals.types[i] == type) && (g->removals.indices[i] == index)) {
+    FORI(0, g->entity_removal_count) {
+        Entity_Reference *removal = &g->entity_removals[i];
+        if((removal->type == type) && (removal->index == index)) {
             return;
         }
     }
     
-    s32 insert = g->removals.count;
-    ASSERT(insert < MAX_LIVE_ENTITY_COUNT);
+    Entity_Reference *removal = &g->entity_removals[g->entity_removal_count++];
+    ASSERT(g->entity_removal_count < MAX_LIVE_ENTITY_COUNT);
     
-    g->removals.types[insert] = type;
-    g->removals.indices[insert] = index;
-    
-    g->removals.count += 1;
+    removal->type = type;
+    removal->index = index;
 }
 
-static s32 add_bullet(Game *g, v2 p, v2 direction, f32 speed, bool explodes = false) {
+static s32 add_bullet(Game *g, v2 p, v2 direction, f32 speed) {
     const s32 insert = g->bullets.count;
     ASSERT(insert < MAX_LIVE_ENTITY_COUNT);
     
     g->bullets.ps                [insert] = p;
     g->bullets.directions        [insert] = direction;
     g->bullets.speeds            [insert] = speed;
-    g->bullets.explodes_on_impact[insert] = explodes;
+    g->bullets.hit_level_geometry[insert] = false;
     
     g->bullets.count += 1;
     return insert;
 }
 
-static v2 closest_in_array(v2 from, v2 *array, s32 count, f32 *out_dist_sq = 0) {
-    v2 result = from;
+struct V2_Closest_Result {
+    v2 closest;
+    f32 dist_sq;
+};
+
+static void v2_closest(v2 from, v2 *array, s32 count, V2_Closest_Result *result) {
+    ASSERT(result);
+    v2 closest = from;
+    f32 best_dist_sq = 0.0f;
     
     if(count) {
-        result = array[0];
-        f32 best = v2_length_sq(result - from);
+        closest = array[0];
+        best_dist_sq = v2_length_sq(closest - from);
         
         FORI(0, count) {
             const v2 it = array[i];
             const f32 dist_sq = v2_length_sq(it - from);
             
-            if(dist_sq < best) {
-                best = dist_sq;
-                result = it;
+            if(dist_sq < best_dist_sq) {
+                best_dist_sq = dist_sq;
+                closest = it;
             }
-        }
-        
-        if(out_dist_sq) {
-            *out_dist_sq = best;
         }
     }
     
+    result->closest = closest;
+    result->dist_sq = best_dist_sq;
+}
+
+static inline v2 sdf_to_tile(v2 sdf_p) {
+    v2 result = (sdf_p * SDF_TO_GAME_FACTOR) - V2(MAP_TILE_HALFDIM);
+    ASSERT(f_in_range(result.x, -MAP_TILE_HALFDIM, MAP_TILE_HALFDIM) && f_in_range(result.y, -MAP_TILE_HALFDIM, MAP_TILE_HALFDIM));
     return result;
 }
 
-static v2 closest_in_array_with_direction(v2 from, v2 *array, s32 count, f32 *out_dist_sq, v2 *direction) {
-    ASSERT(out_dist_sq && direction);
-    v2 result = closest_in_array(from, array, count, out_dist_sq);
+static inline v2 tile_to_sdf(v2 game_p) {
+    ASSERT(f_in_range(game_p.x, -MAP_TILE_HALFDIM, MAP_TILE_HALFDIM) && f_in_range(game_p.y, -MAP_TILE_HALFDIM, MAP_TILE_HALFDIM));
+    v2 result = (game_p + V2(MAP_TILE_HALFDIM)) * GAME_TO_SDF_FACTOR;
+    return result;
+}
+
+static inline v2s working_set_to_cell(v2 p) {
+    v2s result;
+    result.x = f_floor_s((p.x + WORKING_SET_HALFDIM) * GAME_TO_SDF_FACTOR);
+    result.y = f_floor_s((p.y + WORKING_SET_HALFDIM) * GAME_TO_SDF_FACTOR);
+    return result;
+}
+static inline v2 sdf_to_working_set(v2s cell, v2 uv) {
+    v2 result;
     
-    *direction = (result - from) / f_sqrt(*out_dist_sq);
+    // @Float
+    result.x = ((CAST(f32, cell.x) + uv.x) * SDF_TO_GAME_FACTOR) - WORKING_SET_HALFDIM;
+    result.y = ((CAST(f32, cell.y) + uv.y) * SDF_TO_GAME_FACTOR) - WORKING_SET_HALFDIM;
     
     return result;
 }
+static inline Precise_Position global_to_precise(v2f64 global) {
+    Precise_Position result;
+    
+    result.tile.x = f64_floor_s(global.x / CAST(f64, MAP_TILE_DIM));
+    result.tile.y = f64_floor_s(global.y / CAST(f64, MAP_TILE_DIM));
+    
+    result.local.x = CAST(f32, global.x - CAST(f64, result.tile.x) * CAST(f64, MAP_TILE_DIM));
+    result.local.y = CAST(f32, global.y - CAST(f64, result.tile.y) * CAST(f64, MAP_TILE_DIM));
+    
+    ASSERT(f_in_range(result.local.x, -MAP_TILE_HALFDIM, MAP_TILE_HALFDIM) && f_in_range(result.local.y, -MAP_TILE_HALFDIM, MAP_TILE_HALFDIM));
+    
+    return result;
+}
+static inline v2 precise_to_working_set(Precise_Position precise, v2s working_set_tile_p) {
+    v2 result = precise.local + v2_hadamard_prod(V2(MAP_TILE_DIM), V2(precise.tile - working_set_tile_p));
+    return result;
+}
+static inline v2 global_to_working_set(v2f64 global, v2s working_set_tile_p) {
+    return precise_to_working_set(global_to_precise(global), working_set_tile_p);
+}
+
+static inline void working_set_to_sdf(v2 p, v2s *cell, v2 *uv) {
+    // @Float
+    v2 uncentered = (p + V2(WORKING_SET_HALFDIM)) * GAME_TO_SDF_FACTOR;
+    
+    cell->x = f_floor_s(uncentered.x);
+    cell->y = f_floor_s(uncentered.y);
+    
+    uv->x = uncentered.x - CAST(f32, cell->x);
+    uv->y = uncentered.y - CAST(f32, cell->y);
+}
+
+static inline void sdf_sample4(f32 *sdf, s32 left, s32 bottom, f32 radius, f32 *dist) {
+    ASSERT((left) < TILE_SDF_RESOLUTION);
+    ASSERT((bottom) < TILE_SDF_RESOLUTION);
+    dist[0] = sdf[ bottom      * PADDED_TILE_SDF_RESOLUTION +  left     ] - radius;
+    dist[1] = sdf[ bottom      * PADDED_TILE_SDF_RESOLUTION + (left + 1)] - radius;
+    dist[2] = sdf[(bottom + 1) * PADDED_TILE_SDF_RESOLUTION +  left     ] - radius;
+    dist[3] = sdf[(bottom + 1) * PADDED_TILE_SDF_RESOLUTION + (left + 1)] - radius;
+}
+
+static u8 *push_entity(Game_Map_Storage *storage, Game_Tile *tile, ssize size) {
+    Entity_Block *block = &tile->entities;
+    while(block && ((ENTITY_BLOCK_DATA_SIZE - block->header.allocated) < 0)) {
+        block = block->header.next;
+    }
+    
+    if(!block) {
+        // Grab a new block.
+        block = storage->free_entity_blocks;
+        
+        ASSERT(block);
+        storage->free_entity_blocks = block->header.next;
+        
+        block->header.next = tile->entities.header.next;
+        block->header.count = 0;
+        block->header.allocated = 0;
+    }
+    
+    u8 *result = block->data + block->header.allocated;
+    block->header.allocated += size;
+    block->header.count += 1;
+    
+    return result;
+}
+#define PUSH_ENTITY(type, storage, tile) CAST(type *, push_entity(storage, tile, sizeof(type)))
+
+#define PLACE_ENTITY_BEGIN(type) Precise_Position precise = global_to_precise(global_p); \
+Game_Tile *tile = get_stored_tile(storage, precise.tile); \
+type *entity = PUSH_ENTITY(type, storage, tile);
+
+static void place_tree(Game_Map_Storage *storage, v2f64 global_p) {
+    PLACE_ENTITY_BEGIN(Serialized_Tree);
+    
+    entity->header.type = Entity_Type::TREE;
+    entity->p = precise.local;
+}
+
+static void place_item(Game_Map_Storage *storage, v2f64 global_p, Item_Contents contents) {
+    PLACE_ENTITY_BEGIN(Serialized_Item);
+    
+    entity->header.type = Entity_Type::ITEM;
+    entity->p = precise.local;
+    entity->contents = contents;
+}
+
+static void place_turret(Game_Map_Storage *storage, v2f64 global_p) {
+    PLACE_ENTITY_BEGIN(Serialized_Turret);
+    
+    entity->header.type = Entity_Type::TURRET;
+    entity->p = precise.local;
+}
+
+#undef PLACE_ENTITY_BEGIN
+
+static void load_dumb_level(Game *g) {
+    Game_Map_Storage *storage = &g->storage;
+    
+    // Level load:
+    g->current_level_index = 1;
+    g->camera_zoom = 1.0f;
+    g->map_dim = V2(TEST_MAP_WIDTH, TEST_MAP_HEIGHT);
+    
+    { // Spawning the player and positioning the working set.
+        v2f64 player_global_p = V2F64(0.5f, -0.5f);
+        
+        Precise_Position precise = global_to_precise(player_global_p + V2F64(g->map_dim) * 0.5);
+        
+        g->working_set_tile_p = precise.tile;
+        
+        g->players.count = 1;
+        g->players.ps[0] = precise_to_working_set(precise, g->working_set_tile_p);
+        g->players.rots[0] = V2(1.0f, 0.0f);
+        g->players.weapons[0].type = Weapon_Type::SLASH;
+    }
+    
+    { // Initializing the static geometry SDF.
+        s32 tile_bias_x = storage->dim.x;
+        
+        any32 default_distance;
+        default_distance.f = TILE_SDF_MAX_DISTANCE;
+        FORI(0, storage->dim.x * storage->dim.y) {
+            mem_set(storage->tiles[i].sdf, default_distance.s, sizeof(f32) * PADDED_TILE_SDF_RESOLUTION * PADDED_TILE_SDF_RESOLUTION);
+        }
+        
+        v2f64 tree_global_ps[] = {
+            V2F64(-1.0),
+            V2F64(-1.3, 1.0),
+            V2F64(3.0, -0.5),
+        };
+        
+        FORI_NAMED(tree_index, 0, ARRAY_LENGTH(tree_global_ps)) {
+            v2f64 global_p = tree_global_ps[tree_index];
+            
+            // Map-relative coordinates
+            Precise_Position precise = global_to_precise(global_p + V2F64(g->map_dim) * 0.5);
+            
+            rect2 aabb = rect2_phalfdim(precise.local, V2(TREE_RADIUS + TILE_SDF_MAX_DISTANCE));
+            
+            v2 sdf_p = tile_to_sdf(precise.local);
+            
+            rect2 sdf_aabb_f = rect2_phalfdim(sdf_p, V2((TREE_RADIUS + TILE_SDF_MAX_DISTANCE) * GAME_TO_SDF_FACTOR));
+            rect2s sdf_aabb = rect2s_conservative_aabb(sdf_aabb_f);
+            
+            s32 min_tile_x = f_floor_s(aabb.left / MAP_TILE_DIM);
+            s32 min_tile_y = f_floor_s(aabb.bottom / MAP_TILE_DIM);
+            s32 max_tile_x = f_ceil_s(aabb.right / MAP_TILE_DIM);
+            s32 max_tile_y = f_ceil_s(aabb.top / MAP_TILE_DIM);
+            
+            ASSERT((precise.tile.x - min_tile_x) >= 0);
+            ASSERT((precise.tile.y - min_tile_y) >= 0);
+            ASSERT((precise.tile.x + max_tile_x) < storage->dim.x);
+            ASSERT((precise.tile.y + max_tile_y) < storage->dim.y);
+            
+            g->trees.ps[tree_index] = precise_to_working_set(precise, g->working_set_tile_p);
+            
+            FORI_TYPED_NAMED(s32, rel_tile_y, min_tile_y, max_tile_y + 1) {
+                FORI_TYPED_NAMED(s32, rel_tile_x, min_tile_x, max_tile_x + 1) {
+                    v2s tile_p = V2S(precise.tile.x + rel_tile_x, precise.tile.y + rel_tile_y);
+                    f32 *sdf = get_stored_tile(&g->storage, tile_p)->sdf;
+                    
+                    rect2s local_aabb = sdf_aabb;
+                    local_aabb.left -= rel_tile_x * TILE_SDF_RESOLUTION;
+                    local_aabb.bottom -= rel_tile_y * TILE_SDF_RESOLUTION;
+                    local_aabb.right -= rel_tile_x * TILE_SDF_RESOLUTION;
+                    local_aabb.top -= rel_tile_y * TILE_SDF_RESOLUTION;
+                    
+                    local_aabb.left = s_max(local_aabb.left, 0);
+                    local_aabb.bottom = s_max(local_aabb.bottom, 0);
+                    local_aabb.right = s_min(local_aabb.right, TILE_SDF_RESOLUTION - 1);
+                    local_aabb.top = s_min(local_aabb.top, TILE_SDF_RESOLUTION - 1);
+                    
+                    FORI_TYPED_NAMED(s32, y, local_aabb.bottom, local_aabb.top + 1) {
+                        FORI_TYPED_NAMED(s32, x, local_aabb.left, local_aabb.right + 1) {
+                            f32 old_length = sdf[y * PADDED_TILE_SDF_RESOLUTION + x];
+                            
+                            v2 sd_p = V2(x, y);
+                            sd_p = sdf_to_tile(sd_p);
+                            
+                            ASSERT(f_in_range(sd_p.x, -MAP_TILE_HALFDIM, MAP_TILE_HALFDIM) && f_in_range(sd_p.y, -MAP_TILE_HALFDIM, MAP_TILE_HALFDIM));
+                            ASSERT((y * TILE_SDF_RESOLUTION + x) < (TILE_SDF_RESOLUTION * TILE_SDF_RESOLUTION));
+                            f32 new_length = v2_length_or_zero(sd_p - precise.local) - TREE_RADIUS;
+                            
+                            if(new_length < old_length) {
+                                sdf[y * PADDED_TILE_SDF_RESOLUTION + x] = new_length;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // @Speed!!!
+        // Adding padding for bilinear filtering.
+        FORI_REVERSE_TYPED_NAMED(s32, sdf_y, storage->dim.y - 2, 0) {
+            FORI_REVERSE_TYPED_NAMED(s32, sdf_x, storage->dim.x - 2, 0) {
+                f32 *sdf = get_stored_tile(&g->storage, V2S(sdf_x, sdf_y))->sdf;
+                
+                f32 *top_sdf = get_stored_tile(&g->storage, V2S(sdf_x, sdf_y + 1))->sdf;
+                f32 *right_sdf = get_stored_tile(&g->storage, V2S(sdf_x + 1, sdf_y))->sdf;
+                
+                FORI_NAMED(cell_x, 0, PADDED_TILE_SDF_RESOLUTION) {
+                    sdf[(PADDED_TILE_SDF_RESOLUTION - 1) * PADDED_TILE_SDF_RESOLUTION + cell_x] = top_sdf[cell_x];
+                }
+                FORI_NAMED(cell_y, 0, PADDED_TILE_SDF_RESOLUTION) {
+                    sdf[cell_y * PADDED_TILE_SDF_RESOLUTION + (PADDED_TILE_SDF_RESOLUTION - 1)] = right_sdf[cell_y * PADDED_TILE_SDF_RESOLUTION];
+                }
+            }
+        }
+    }
+    
+#if 0
+    g->trees.count = 3;
+    g->trees.ps[0] = V2(-1.0f);
+    g->trees.ps[1] = V2(-1.3f,  1.0f);
+    g->trees.ps[2] = V2( 3.0f, -0.5f);
+    
+    g->items.count = 1;
+    g->items.ps[0] = V2(0.0f, 1.0f);
+    g->items.contents[0].type = Item_Type::WEAPON;
+    g->items.contents[0].weapon.type = Weapon_Type::THRUST;
+    
+    g->bullets.count = 2;
+    g->bullets.ps[0] = V2(-1.5f, 4.0f);
+    g->bullets.directions[0] = V2(0.0f, 1.0f);
+    g->bullets.speeds[0] = 0.5f;
+    g->bullets.ps[1] = V2(-25.0f);
+    g->bullets.directions[1] = V2(0.0f, 1.0f);
+    g->bullets.speeds[1] = 0.5f;
+    
+    g->turrets.count = 1;
+    g->turrets.ps       [0] = V2(0.0f, 2.0f);
+    g->turrets.cooldowns[0] = 1.0f;
+#else
+    
+    {
+        v2f64 tree_global_ps[] = {
+            V2F64(-1.0),
+            V2F64(-1.3, 1.0),
+            V2F64(3.0, -0.5),
+        };
+        
+        v2f64 item_global_ps[] = {
+            V2F64(0.0, 1.0),
+        };
+        Item_Contents item_contents[] = {
+            make_weapon_item(Item_Type::WEAPON, Weapon_Type::THRUST),
+        };
+        
+        v2f64 turret_global_ps[] = {
+            V2F64(0.0, 2.0),
+        };
+        
+        FORI(0, ARRAY_LENGTH(tree_global_ps)) {
+            place_tree(storage, tree_global_ps[i] + V2F64(g->map_dim) * 0.5);
+        }
+        
+        FORI(0, ARRAY_LENGTH(item_global_ps)) {
+            place_item(storage, item_global_ps[i] + V2F64(g->map_dim) * 0.5, item_contents[i]);
+        }
+        
+        FORI(0, ARRAY_LENGTH(turret_global_ps)) {
+            place_turret(storage, turret_global_ps[i] + V2F64(g->map_dim) * 0.5);
+        }
+    }
+#endif
+    
+    // Loading the tiles into the working set.
+    FORI_TYPED_NAMED(s32, sdf_y, 0, WORKING_SET_GRID_HEIGHT) {
+        FORI_TYPED_NAMED(s32, sdf_x, 0, WORKING_SET_GRID_WIDTH) {
+            s32 global_tile_x = g->working_set_tile_p.x + sdf_x - 1;
+            s32 global_tile_y = g->working_set_tile_p.y + sdf_y - 1;
+            
+            ASSERT(global_tile_x >= 0 && global_tile_x < storage->dim.x);
+            ASSERT(global_tile_y >= 0 && global_tile_y < storage->dim.y);
+            
+            g->sdfs_by_tile[sdf_y * WORKING_SET_GRID_WIDTH + sdf_x] = get_stored_tile(&g->storage, V2S(global_tile_x, global_tile_y))->sdf;
+        }
+    }
+}
+
+#define GET_INSERT_INDEX(soa) g->##soa##.count++; ASSERT(g->##soa##.count < MAX_LIVE_ENTITY_COUNT)
+static void add_turret(Game *g, v2 p) {
+    s32 add = GET_INSERT_INDEX(turrets);
+    
+    g->turrets.ps[add] = p;
+    g->turrets.cooldowns[add] = 1.0f;
+}
+
+static void add_tree(Game *g, v2 p) {
+    s32 add = GET_INSERT_INDEX(trees);
+    
+    g->trees.ps[add] = p;
+}
+
+static void add_item(Game *g, v2 p, Item_Contents contents) {
+    s32 add = GET_INSERT_INDEX(items);
+    
+    g->items.ps[add] = p;
+    g->items.contents[add] = contents;
+}
+#undef GET_INSERT_INDEX
 
 void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_Info *audio, Datapack_Handle *datapack) {
     TIME_BLOCK;
     const f32 dt32 = (f32)dt;
     Input in = *_in;
+    const bool non_visual_update = (audio || datapack);
     
-    //
-    // Init:
-    //
 #if GENESIS_DEV
     if(g->godmode) {
         g->lost = false;
     }
 #endif
-    
-    if((g->lost || !g->current_level_index) && datapack) {
-#if 1
-        u32 new_level_index = 1;
-        bool fresh_level = g->current_level_index != new_level_index;
-        
-        *g = {};
-        g->lost = false;
-        
-        // Level load:
-        g->current_level_index = new_level_index;
-        g->camera_zoom = 1.0f;
-        
-        g->players.count = 1;
-        
-        g->partners.count = 4;
-        g->partners.offsets[0] = V2(0.0f, 1.0f);
-        g->partners.offsets[1] = V2(-1.0f, 0.0f);
-        g->partners.offsets[2] = V2(0.0f, -1.0f);
-        g->partners.offsets[3] = V2(1.0f, 0.0f);
-        
-        g->trees.count = 3;
-        g->trees.ps[0] = V2(-1.0f);
-        g->trees.ps[1] = V2(-1.3f,  1.0f);
-        g->trees.ps[2] = V2( 3.0f, -0.5f);
-        
-#if 1
-        g->turrets.count = 1;
-        g->turrets.ps       [0] = V2(0.0f, 2.0f);
-        g->turrets.cooldowns[0] = 1.0f;
-#endif
-        
-        g->dogs.count = 1;
-        g->dogs.ps[0] = V2(2.0f);
-        
-#if 0
-        g->wall_turrets.count = 1;
-        g->wall_turrets.ps[0] = V2(-1.0f);
-#endif
-        
-        g->map_halfdim = V2(TEST_MAP_WIDTH / 2.0f, TEST_MAP_HEIGHT / 2.0f);
-        
-        g->current_level_index = new_level_index;
-        
-        // Associated assets:
-        // We only do this when loading a new level, not when resetting the current one.
-        // :AudioInVisualState @Cleanup
-        if(fresh_level && datapack) {
-            // Load necessary assets
-        }
-#else
-        s32 desired_level = 1; //g->desired_level_index;
-        *g = {}; // @Cleanup @Speed
-        
-        g->desired_level_index = desired_level;
-        
-        g->camera_zoom = 1.0f;
-        
-        string asset = READ_ENTIRE_ASSET(&temporary_memory, datapack, 1, lvl);
-        Serialised_Level_Data serialised;
-        
-        serialised.header = (Level_Header *)asset.data;
-        serialised.player_ps = (v2 *)(serialised.header + 1);
-        serialised.partner_offsets = (v2 *)(serialised.player_ps + serialised.header->player_count);
-        serialised.turret_ps = (v2 *)(serialised.partner_offsets + serialised.header->partner_count);
-        serialised.turret_cooldowns = (f32 *)(serialised.turret_ps + serialised.header->turret_count);
-        serialised.dog_ps = (v2 *)(serialised.turret_cooldowns + serialised.header->turret_count);
-        serialised.wall_turret_ps = (v2 *)(serialised.dog_ps + serialised.header->dog_count);
-        serialised.target_ps = (v2 *)(serialised.wall_turret_ps + serialised.header->wall_turret_count);
-        
-        ASSERT(serialised.header->version == 1);
-        
-        g->current_level_index = serialised.header->index;
-        g->map_halfdim = serialised.header->map_halfdim;
-        {
-            s32 count = serialised.header->player_count;
-            FORI(0, count) {
-                g->players.ps[i] = serialised.player_ps[i];
-            }
-            g->players.count = count;
-        }
-        {
-            s32 count = serialised.header->partner_count;
-            FORI(0, count) {
-                g->partners.offsets[i] = serialised.partner_offsets[i];
-            }
-            g->partners.count = count;
-        }
-        {
-            s32 count = serialised.header->turret_count;
-            FORI(0, count) {
-                g->turrets.ps[i] = serialised.turret_ps[i];
-                g->turrets.cooldowns[i] = serialised.turret_cooldowns[i];
-            }
-            g->turrets.count = count;
-        }
-        {
-            s32 count = serialised.header->dog_count;
-            FORI(0, count) {
-                g->dogs.ps[i] = serialised.dog_ps[i];
-            }
-            g->dogs.count = count;
-        }
-        {
-            s32 count = serialised.header->wall_turret_count;
-            FORI(0, count) {
-                g->wall_turrets.ps[i] = serialised.wall_turret_ps[i];
-            }
-            g->wall_turrets.count = count;
-        }
-        {
-            s32 count = serialised.header->target_count;
-            FORI(0, count) {
-                g->targets.ps[i] = serialised.target_ps[i];
-            }
-            g->targets.count = count;
-        }
-#endif
-    }
-    
-    //
-    // At this point, level and entity data should be valid.
-    //
-    
-    // Map constants:
-    const v2 map_dim = g->map_halfdim * 2.0f;
-    const v2 map_halfdim = g->map_halfdim;
     
     //
     // :ControlMovementSeparation
@@ -591,7 +806,7 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
     // last frame and current frame data.
     //
     
-    { // Player controls.
+    if(g->players.count) { // Player controls.
         {
             f32 camera_zoom = g->camera_zoom;
             if(BUTTON_DOWN(in, slot1)) {
@@ -599,21 +814,22 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
             } else if(BUTTON_DOWN(in, slot2)) {
                 camera_zoom = 0.5f;
             } else if(BUTTON_DOWN(in, slot3)) {
-                camera_zoom = 2.0f;
+                camera_zoom = 0.25f;
             } else if(BUTTON_DOWN(in, slot4)) {
-                camera_zoom = 1.0f;
+                camera_zoom = 2.0f;
             }
             
             g->camera_zoom = camera_zoom;
             g->xhair_offset = unit_scale_to_world_space_offset(in.xhairp, camera_zoom);
+            
+            v2_normalize_if_nonzero(g->xhair_offset, &g->players.rots[0]);
         }
         
-        // @Incomplete: Choose between xhair_offset and xhair_position to resolve multi-player
-        // aiming.
         const v2 xhair_offset = g->xhair_offset;
         const s32 count = g->players.count;
         for(s32 iplayer = 0; iplayer < count; ++iplayer) {
             v2 p = g->players.ps[iplayer];
+            v2 rot = g->players.rots[iplayer];
             
             { // Movement.
                 v2 dp = g->players.dps[iplayer];
@@ -627,30 +843,122 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
             }
             
             { // Action.
-                if(BUTTON_PRESSED(&in, attack)) {
-                    const f32 spawn_dist = (BULLET_RADIUS + PLAYER_HALFHEIGHT + PROJECTILE_SPAWN_DIST_EPSILON);
-                    
-                    FORI_NAMED(_partner, 0, g->partners.count) {
-                        v2 partner_offset = g->partners.offsets[_partner];
-                        v2 dir = v2_normalize(xhair_offset + partner_offset);
+                Player_Animation_State *anim_state = &g->players.animation_states[iplayer];
+                Weapon *weapon = &g->players.weapons[iplayer];
+                
+                anim_state->time_since_last_attack += dt32;
+                
+                if(!anim_state->animating || anim_state->cancellable) {
+                    if(BUTTON_PRESSED(&in, attack)) {
+                        f32 attack_dt = dt32;
                         
-                        v2 spawn_offset = dir * spawn_dist;
-                        
-                        add_bullet(g, p + spawn_offset, dir, 10.0f);
-                        
-                        // :AudioInVisualState We don't want to think about whether we're in a visual or an actual update.
-                        if(audio) {
-                            Audio_Play_Commands *commands = play_sound(audio, FIND_SOUND_ID(audio, erase));
-                            if(commands) {
-                                u8 channel_count = audio->channel_count;
-                                compute_volumes_for_position(commands->volume, channel_count, spawn_offset);
-                                mem_copy(commands->volume, commands->old_volume, sizeof(f32) * channel_count);
+                        if(weapon->type == Weapon_Type::SLASH) {
+                            // Shortsword
+                            f32 old_rot0_y = g->players.weapons[iplayer].melee.slash.rot0.y;
+                            f32 old_rot1_y = g->players.weapons[iplayer].melee.slash.rot1.y;
+                            
+                            v2 rot0 = v2_angle_to_complex(-PI * 0.25f);
+                            v2 rot1 = v2_angle_to_complex( PI * 0.25f);
+                            
+                            if((anim_state->time_since_last_attack < 0.5f) && (old_rot0_y < old_rot1_y)) {
+                                SWAP(rot0, rot1);
                             }
+                            attack_dt = 6.0f * dt32;
+                            
+                            weapon->type = Weapon_Type::SLASH;
+                            weapon->melee.slash.rot0 = rot0;
+                            weapon->melee.slash.rot1 = rot1;
+                        } else if(weapon->type == Weapon_Type::THRUST) {
+                            // Rapier
+                            v2 translate0 = V2(0.0f, 0.0f);
+                            v2 translate1 = V2(1.0f, 0.0f);
+                            
+                            if(anim_state->time_since_last_attack < 0.5f) {
+                                translate0 = V2(0.5f, 0.0f);
+                            }
+                            attack_dt = 5.0f * dt32;
+                            
+                            weapon->type = Weapon_Type::THRUST;
+                            weapon->melee.thrust.translate0 = translate0;
+                            weapon->melee.thrust.translate1 = translate1;
+                        } else UNHANDLED;
+                        
+                        anim_state->t  = 0.0f;
+                        anim_state->dt = attack_dt;
+                        anim_state->animating = true;
+                        anim_state->cancellable = false;
+                    }
+                }
+            }
+            
+            { // Hitcap update.
+                auto *anim_state = &g->players.animation_states[iplayer];
+                
+                if(anim_state->animating) {
+                    Weapon *weapon = &g->players.weapons[iplayer];
+                    
+                    anim_state->t += anim_state->dt;
+                    
+                    if((weapon->type == Weapon_Type::SLASH) ||
+                       (weapon->type == Weapon_Type::THRUST)) {
+                        cap2 hitcap;
+                        
+                        v2 rot0 = V2(1.0f, 0.0f);
+                        v2 rot1 = V2(1.0f, 0.0f);
+                        
+                        v2 translate0 = V2();
+                        v2 translate1 = V2();
+                        
+                        if(f_in_range(anim_state->t, 0.0f, 1.0f)) {
+                            f32 t = anim_state->t;
+                            f32 ease_t = t;
+                            
+                            // Consider computing weapon momentum to influence damage.
+                            
+                            switch(weapon->type) {
+                                case Weapon_Type::SLASH: {
+                                    ease_t = f_sin(t*t*t*t * PI * 0.5f);
+                                    
+                                    rot0 = weapon->melee.slash.rot0;
+                                    rot1 = weapon->melee.slash.rot1;
+                                } break;
+                                
+                                case Weapon_Type::THRUST: {
+                                    ease_t = f_sin(t*t*t * PI * 0.5f);
+                                    
+                                    translate0 = weapon->melee.thrust.translate0;
+                                    translate1 = weapon->melee.thrust.translate1;
+                                } break;
+                            }
+                            
+                            v2 angle = v2_lerp_n(rot0, rot1, ease_t);
+                            v2 hitcap_rot = v2_complex_prod(rot, angle);
+                            v2 hitcap_translate = v2_lerp(translate0, translate1, ease_t);
+                            hitcap_translate = v2_complex_prod(hitcap_translate, hitcap_rot);
+                            hitcap_translate += p;
+                            
+                            hitcap.a = hitcap_rot * PLAYER_HITCAP_A_OFFSET + hitcap_translate;
+                            hitcap.b = hitcap_rot * PLAYER_HITCAP_B_OFFSET + hitcap_translate;
+                            hitcap.radius = PLAYER_HITCAP_RADIUS;
+                            
+                            g->players.weapon_hitcaps[iplayer] = hitcap;
+                        } else {
+                            anim_state->animating = false;
+                            anim_state->cancellable = false;
+                            g->players.weapon_hitcaps[iplayer].radius = 0.0f;
+                        }
+                        
+                        if(!anim_state->cancellable && (anim_state->t > 0.8f)) {
+                            anim_state->time_since_last_attack = 0.0f;
+                            anim_state->cancellable = true;
                         }
                     }
                 }
             }
         }
+    } else if(BUTTON_PRESSED(in, attack)) {
+        // Reset the level.
+        load_dumb_level(g);
     }
     
     { // Turret control.
@@ -660,27 +968,21 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
             const v2 p = g->turrets.ps[i];
             
             if(cooldown <= 0.0f) {
-                const f32 spawn_dist = (BULLET_RADIUS + f_sqrt(TURRET_HALFWIDTH*TURRET_HALFWIDTH + TURRET_HALFHEIGHT*TURRET_HALFHEIGHT) + PROJECTILE_SPAWN_DIST_EPSILON);
-                f32 dist_sq;
-                v2 direction;
-                v2 target_p = closest_in_array_with_direction(p, g->players.ps, g->players.count, &dist_sq, &direction);
+                const f32 spawn_dist = (BULLET_RADIUS + TURRET_RADIUS + PROJECTILE_SPAWN_DIST_EPSILON);
                 
-                {
-                    f32 other_dist_sq;
-                    v2 other_direction;
-                    v2 partner_p = closest_in_array_with_direction(p, g->partners.ps, g->partners.count, &other_dist_sq, &other_direction);
+                s32 targets_in_range = g->players.count;
+                if(targets_in_range > 0) {
+                    V2_Closest_Result result;
+                    v2_closest(p, g->players.ps, g->players.count, &result);
                     
-                    if(other_dist_sq < dist_sq) {
-                        target_p = partner_p;
-                        direction = other_direction;
+                    if(result.dist_sq) {
+                        v2 direction = (result.closest - p) * f_inv_sqrt(result.dist_sq);
+                        v2 spawn_p = p + direction * spawn_dist;
+                        
+                        add_bullet(g, spawn_p, direction, 2.0f);
+                        cooldown = 1.0f;
                     }
                 }
-                
-                v2 spawn_p = p + direction * spawn_dist;
-                
-                add_bullet(g, spawn_p, direction, 2.0f);
-                
-                cooldown = 1.0f;
             }
             
             cooldown -= dt32;
@@ -689,94 +991,24 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
         }
     }
     
-    { // Dog control.
-        const s32 count = g->dogs.count;
-        FORI(0, count) {
-            const f32 speed = 10.0f;
-            v2 p       = g->dogs.ps [i];
-            v2 dp      = g->dogs.dps[i];
-            
-            f32 dist_to_target_sq;
-            v2 direction;
-            v2 target_p = closest_in_array_with_direction(p, g->partners.ps, g->partners.count, &dist_to_target_sq, &direction);
-            v2 ddp = direction * speed;
-            
-            { // Compensate for our own momentum:
-                v2 dir_perp = v2_perp(direction);
-                f32 perp_dot = v2_inner(dp, dir_perp);
-                if(perp_dot > 0.1f) {
-                    ddp -= dir_perp;
-                } else if(perp_dot < -0.1f) {
-                    ddp += dir_perp;
-                }
-            }
-            
-            { // Readjust our trajectory if we've passed the target:
-                if(v2_inner(direction, dp) < 0.0f) {
-                    dp *= 0.99f;
-                    ddp += -dp * 0.5f;
-                }
-            }
-            
-            { // Cap our speed:
-                f32 current_speed = v2_length(dp);
-                if(current_speed > 10.0f) {
-                    dp = dp / current_speed * 10.0f;
-                }
-            }
-            
-            dp += ddp * dt32;
-            
-            g->dogs.dps[i] = dp;
-        }
-    }
-    
     { // Bullet control.
         s32 count = g->bullets.count;
         
         FORI_TYPED(s32, 0, count) {
             const v2 p = g->bullets.ps[i];
+            v2 dir    = g->bullets.directions [i];
+            f32 speed = g->bullets.speeds     [i];
             
-            if((p.x < -map_halfdim.x) || (p.x >= map_halfdim.x) ||
-               (p.y < -map_halfdim.y) || (p.y >= map_halfdim.y)) {
-                mark_entity_for_removal(g, ENTITY_TYPE_BULLET, i);
+            if((p.x < -MAP_TILE_HALFDIM) || (p.x >= MAP_TILE_HALFDIM) ||
+               (p.y < -MAP_TILE_HALFDIM) || (p.y >= MAP_TILE_HALFDIM)) {
+                mark_entity_for_removal(g, Entity_Type::BULLET, i);
+            } else {
+                g->bullets.directions[i] = dir;
+                g->bullets.dps[i] = dir * speed;
             }
         }
         
         g->bullets.count = count;
-    }
-    
-    { // Player movement.
-        const s32 count = g->players.count;
-        FORI(0, count) {
-            v2 p = g->players.ps[i];
-            v2 dp = g->players.dps[i];
-            
-            p += dp * dt32;
-            
-            g->players.ps[i] = p;
-        }
-    }
-    
-    { // Bullet movement.
-        const s32 count = g->bullets.count;
-        FORI(0, count) {
-            v2 p      = g->bullets.ps         [i];
-            v2 dir    = g->bullets.directions [i];
-            f32 speed = g->bullets.speeds     [i];
-            
-            p += dir * speed * dt32;
-            
-            g->bullets.ps[i] = p;
-        }
-    }
-    
-    { // Dog movement.
-        const s32 count = g->dogs.count;
-        
-        FORI(0, count) {
-            g->dogs.ps[i] += g->dogs.dps[i] * dt32;
-        }
     }
     
     //
@@ -784,82 +1016,335 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
     //
     // Check for solid collisions.
     
-    // Trying a "gather in buckets" approach.
-    // The advantage is that buckets share some attributes, which reduces branching,
-    // but can still be treated homogeneously.
-    // HOWEVER, some passes would really rather have the ability to specify which
-    // arrays they want (notably partner/player).
-    
-    // Entities with disk collision.
-    const u8 disk_entity_types_for_arrays[] = {
-        ENTITY_TYPE_DOG,
-    };
-    const s32      disk_counts_for_arrays[] = {
-        g->dogs.count,
-    };
-    v2              * const disk_p_arrays[] = {
-        g->dogs.ps,
-    };
-    const f32       disk_radii_for_arrays[] = {
-        DOG_RADIUS,
-    };
-    
-    // Entities with box collision.
-    const u8 obb_entity_types_for_arrays[] = {
-        ENTITY_TYPE_PLAYER,
-        ENTITY_TYPE_PARTNER,
-        ENTITY_TYPE_TURRET,
-        ENTITY_TYPE_WALL_TURRET,
-    };
-    const s32      obb_counts_for_arrays[] = {
-        g->     players.count,
-        g->    partners.count,
-        g->     turrets.count,
-        g->wall_turrets.count,
-    };
-    v2              * const obb_p_arrays[] = {
-        g->     players.ps,
-        g->    partners.ps,
-        g->     turrets.ps,
-        g->wall_turrets.ps,
-    };
-    const v2     obb_halfdims_for_arrays[] = {
-        V2(     PLAYER_HALFWIDTH,      PLAYER_HALFHEIGHT),
-        V2(    PARTNER_HALFWIDTH,     PARTNER_HALFHEIGHT),
-        V2(     TURRET_HALFWIDTH,      TURRET_HALFHEIGHT),
-        V2(WALL_TURRET_HALFWIDTH, WALL_TURRET_HALFHEIGHT),
-    };
-    
-    { // Enforcing map bounds.
-        FORI_TYPED(u32, 0, ARRAY_LENGTH(disk_entity_types_for_arrays)) {
-            v2 *ps = disk_p_arrays[i];
-            s32 count = disk_counts_for_arrays[i];
-            f32 radius = disk_radii_for_arrays[i];
-            v2 minkowski_map_halfdim = map_halfdim - V2(radius);
-            
-            FORI_NAMED(typed, 0, count) {
-                v2 p = ps[typed];
-                
-                p.x = f_symmetrical_clamp(p.x, minkowski_map_halfdim.x);
-                p.y = f_symmetrical_clamp(p.y, minkowski_map_halfdim.y);
-                
-                ps[typed] = p;
-            }
-        }
+    {
+        Movement_Batch batches[] = {
+            {
+                g->players.ps,
+                g->players.dps,
+                PLAYER_RADIUS,
+                g->players.count,
+                Entity_Type::PLAYER,
+            },
+            {
+                g->bullets.ps,
+                g->bullets.dps,
+                BULLET_RADIUS,
+                g->bullets.count,
+                Entity_Type::BULLET,
+            },
+        };
         
-        FORI_TYPED(u32, 0, ARRAY_LENGTH(obb_entity_types_for_arrays)) {
-            v2 *ps = obb_p_arrays[i];
-            s32 count = obb_counts_for_arrays[i];
-            v2 halfdim = obb_halfdims_for_arrays[i];
-            v2 minkowski_map_halfdim = map_halfdim - halfdim;
+        s32 batch_count = ARRAY_LENGTH(batches);
+        
+        s32 cells_visited_capacity = 64;
+        v2s *cells_visited = push_array(&temporary_memory, v2s, cells_visited_capacity);
+        s32 cells_to_check_capacity = 64;
+        v2s *cells_to_check = push_array(&temporary_memory, v2s, cells_to_check_capacity);
+        
+        FORI_NAMED(batch_index, 0, batch_count) {
+            Movement_Batch *batch = &batches[batch_index];
             
-            FORI_NAMED(typed, 0, count) {
-                v2 p = ps[typed];
+            const f32 radius = batch->radius;
+            const rect2 bounds = rect2_4f(-WORKING_SET_HALFDIM + radius, -WORKING_SET_HALFDIM + radius, WORKING_SET_HALFDIM - radius, WORKING_SET_HALFDIM - radius);
+            
+            FORI_NAMED(entity_index, 0, batch->count) {
+                v2 p = batch->ps[entity_index];
+                v2 dp = batch->dps[entity_index] * dt32;
                 
-                p.x = f_symmetrical_clamp(p.x, minkowski_map_halfdim.x);
-                p.y = f_symmetrical_clamp(p.y, minkowski_map_halfdim.y);
+                f32 dp_length_sq = v2_length_sq(dp);
+                v2 target = p + dp;
                 
-                ps[typed] = p;
+                p.x      = f_clamp(p.x,      bounds.left,   bounds.right);
+                p.y      = f_clamp(p.y,      bounds.bottom, bounds.top);
+                target.x = f_clamp(target.x, bounds.left,   bounds.right);
+                target.y = f_clamp(target.y, bounds.bottom, bounds.top);
+                
+                f32 dist[4];
+                f32 start_dist;
+                v2 sdf_start_uv;
+                v2s sdf_start_cell;
+                v2 sdf_target_uv;
+                v2s sdf_target_cell;
+                u16 start_tile_index;
+                {
+                    working_set_to_sdf(p, &sdf_start_cell, &sdf_start_uv);
+                    working_set_to_sdf(target, &sdf_target_cell, &sdf_target_uv);
+                    
+                    v2s tile_p = sdf_start_cell / TILE_SDF_RESOLUTION;
+                    v2s local_cell = sdf_start_cell % TILE_SDF_RESOLUTION;
+                    start_tile_index = CAST(u16, tile_p.y * WORKING_SET_GRID_WIDTH + tile_p.x);
+                    
+                    f32 *sdf = g->sdfs_by_tile[start_tile_index];
+                    
+                    sdf_sample4(sdf, local_cell.x, local_cell.y, radius, dist);
+                    start_dist = f_sample_bilinear(dist[0], dist[1], dist[2], dist[3], sdf_start_uv);
+                }
+                
+                if(0 && ((start_dist * start_dist) >= (dp_length_sq * 1.05f))) {
+                    // We can skip the collision check.
+                    batch->ps[entity_index] = target;
+                } else {
+                    // Go on to the test.
+                    switch(batch->type) {
+                        case Entity_Type::PLAYER: {
+                            // Pathfind.
+                            const f32 sdf_max_distance = GAME_TO_SDF_FACTOR * f_sqrt(dp_length_sq);
+                            const f32 sdf_max_distance_sq = sdf_max_distance * sdf_max_distance;
+                            const f32 sdf_walk_cell_radius = sdf_max_distance + 0.70710678f;
+                            const f32 sdf_walk_cell_radius_sq = sdf_walk_cell_radius * sdf_walk_cell_radius;
+                            
+                            v2s best_sdf_cell = sdf_start_cell;
+                            v2 best_sdf_uv = sdf_start_uv;
+                            f32 best_sdf_dist_sq = sdf_max_distance_sq;
+                            
+                            s32 cells_visited_count = 0;
+                            s32 cells_to_check_count = 0;
+                            
+                            v2u16 start_cell = V2U16(start_tile_index, CAST(u16, (sdf_start_cell.y << TILE_SDF_RESOLUTION_BITS) | sdf_start_cell.x));
+                            cells_to_check[cells_to_check_count++] = sdf_start_cell;
+                            
+                            while(cells_to_check_count) {
+                                v2s check_p = cells_to_check[--cells_to_check_count];
+                                
+                                f32 *sdf;
+                                {
+                                    v2s tile_p = check_p / TILE_SDF_RESOLUTION;
+                                    v2s cell_p = check_p % TILE_SDF_RESOLUTION;
+                                    
+                                    sdf = g->sdfs_by_tile[tile_p.y * WORKING_SET_GRID_WIDTH + tile_p.x];
+                                    sdf_sample4(sdf, cell_p.x, cell_p.y, radius, dist);
+                                }
+                                
+                                // We're not taking the path we take to get to each cell into account.
+                                // The result is that, when we're moving around an obstacle, we can go further than
+                                // if we actually traced the path that took the long way around (in fact, we go
+                                // exactly as far as if there was no obstacle, but this is different from tunneling,
+                                // since we can't actually cross an obstacle if we aren't going fast enough to move
+                                // around it).
+                                // 
+                                // However, this might not be undesirable at all; the alternative would be more complex and
+                                // would also potentially mess with our trajectory in unpredictable ways.
+                                v2 dp_from_start;
+                                dp_from_start.x = CAST(f32, CAST(s32, check_p.x) - sdf_start_cell.x) + 0.5f - sdf_start_uv.x;
+                                dp_from_start.y = CAST(f32, CAST(s32, check_p.y) - sdf_start_cell.y) + 0.5f - sdf_start_uv.y;
+                                bool bottom_path = v2_length_sq(dp_from_start + V2(0.0f, -1.0f)) < sdf_walk_cell_radius_sq;
+                                bool left_path   = v2_length_sq(dp_from_start + V2(-1.0f, 0.0f)) < sdf_walk_cell_radius_sq;
+                                bool right_path  = v2_length_sq(dp_from_start + V2(1.0f, 0.0f)) < sdf_walk_cell_radius_sq;
+                                bool top_path    = v2_length_sq(dp_from_start + V2(0.0f, 1.0f)) < sdf_walk_cell_radius_sq;
+                                
+                                v2 split_points[4];
+                                s32 split_count = 0;
+                                
+                                if((dist[0] * dist[1]) < 0.0f) {
+                                    // Split bottom
+                                    f32 split_bottom = -dist[0] / (-dist[0] + dist[1]);
+                                    v2 split_p = V2(-0.5f + split_bottom, -0.5f);
+                                    
+                                    split_points[split_count++] = split_p;
+                                } else if(dist[0] < 0.0f) {
+                                    bottom_path = false;
+                                }
+                                
+                                if((dist[0] * dist[2]) < 0.0f) {
+                                    // Split left
+                                    f32 split_left = -dist[0] / (-dist[0] + dist[2]);
+                                    v2 split_p = V2(-0.5f, -0.5f + split_left);
+                                    
+                                    split_points[split_count++] = split_p;
+                                } else if(dist[0] < 0.0f) {
+                                    left_path = false;
+                                }
+                                
+                                if((dist[3] * dist[1]) < 0.0f) {
+                                    // Split right
+                                    f32 split_right = -dist[1] / (-dist[1] + dist[3]);
+                                    v2 split_p = V2(0.5f, -0.5f + split_right);
+                                    
+                                    split_points[split_count++] = split_p;
+                                } else if(dist[3] < 0.0f) {
+                                    right_path = false;
+                                }
+                                
+                                if((dist[2] * dist[3]) < 0.0f) {
+                                    // Split top
+                                    f32 split_top = -dist[2] / (-dist[2] + dist[3]);
+                                    v2 split_p = V2(-0.5f + split_top, 0.5f);
+                                    
+                                    split_points[split_count++] = split_p;
+                                } else if(dist[3] < 0.0f) {
+                                    top_path = false;
+                                }
+                                
+                                v2 cell_dp;
+                                cell_dp.x = CAST(f32, sdf_target_cell.x - CAST(s32, check_p.x)) + sdf_target_uv.x - 0.5f;
+                                cell_dp.y = CAST(f32, sdf_target_cell.y - CAST(s32, check_p.y)) + sdf_target_uv.y - 0.5f;
+                                
+                                v2 closest;
+                                closest.x = f_clamp(cell_dp.x, -0.5f, 0.5f);
+                                closest.y = f_clamp(cell_dp.y, -0.5f, 0.5f);
+                                switch(split_count) {
+                                    case 0: {
+                                    } break;
+                                    
+                                    case 2: {
+                                        // One split plane.
+                                        v2 split_a = split_points[0];
+                                        v2 split_b = split_points[1];
+                                        
+                                        v2 normal = v2_perp(split_a - split_b);
+                                        
+                                        v2 negative_vert;
+                                        if(dist[0] < 0.0f) {
+                                            negative_vert = V2(-0.5f);
+                                        } else if(dist[1] < 0.0f) {
+                                            negative_vert = V2(0.5f, -0.5f);
+                                        } else if(dist[2] < 0.0f) {
+                                            negative_vert = V2(-0.5f, 0.5f);
+                                        } else {
+                                            ASSERT(dist[3] < 0.0f);
+                                            negative_vert = V2(0.5f, 0.5f);
+                                        }
+                                        
+                                        if(v2_inner(normal, negative_vert - split_a) > 0.0f) {
+                                            normal = -normal;
+                                        }
+                                        
+                                        v2 response = split_a - closest;
+                                        f32 dot = v2_inner(normal, response);
+                                        if(dot > 0.0f) {
+                                            closest = line_closest(split_a, split_b, closest);
+                                        }
+                                    } break;
+                                    
+                                    case 4: {
+                                        // Two split planes.
+                                        if(dist[0] < 0.0f) {
+                                            // The two split planes are from the bottom left and the top right.
+                                            {
+                                                const v2 split_bottom = split_points[0];
+                                                const v2 split_left = split_points[1];
+                                                
+                                                v2 normal = v2_perp(split_bottom - split_left);
+                                                v2 response = split_bottom - closest;
+                                                f32 dot = v2_inner(response, normal);
+                                                
+                                                if(dot > 0.0f) {
+                                                    closest = line_closest(split_bottom, split_left, closest);
+                                                }
+                                            }
+                                            
+                                            {
+                                                const v2 split_right = split_points[2];
+                                                const v2 split_top = split_points[3];
+                                                
+                                                v2 normal = v2_perp(split_top - split_right);
+                                                v2 response = split_top - closest;
+                                                f32 dot = v2_inner(response, normal);
+                                                
+                                                if(dot > 0.0f) {
+                                                    closest = line_closest(split_top, split_right, closest);
+                                                }
+                                            }
+                                        }
+                                    } break;
+                                    
+                                    default: UNHANDLED;
+                                }
+                                
+                                f32 dist_sq = v2_length_sq(cell_dp - closest);
+                                
+                                if(dist_sq < best_sdf_dist_sq) {
+                                    best_sdf_dist_sq = dist_sq;
+                                    best_sdf_cell = check_p;
+                                    best_sdf_uv = closest + V2(0.5f);
+                                }
+                                
+                                v2s left_cell = V2S(check_p.x - 1, check_p.y);
+                                v2s bottom_cell = V2S(check_p.x, check_p.y - 1);
+                                v2s right_cell = V2S(check_p.x + 1, check_p.y);
+                                v2s top_cell = V2S(check_p.x, check_p.y + 1);
+                                
+                                // @Speed: We're linearly searching through every visited cell.
+                                FORI(0, cells_visited_count) {
+                                    v2s visited = cells_visited[i];
+                                    
+                                    if(visited.all == bottom_cell.all) {
+                                        bottom_path = false;
+                                    } else if(visited.all == left_cell.all) {
+                                        left_path = false;
+                                    } else if(visited.all == right_cell.all) {
+                                        right_path = false;
+                                    } else if(visited.all == top_cell.all) {
+                                        top_path = false;
+                                    }
+                                }
+                                
+                                if(bottom_path) {
+                                    cells_to_check[cells_to_check_count++] = bottom_cell;
+                                }
+                                if(left_path) {
+                                    cells_to_check[cells_to_check_count++] = left_cell;
+                                }
+                                if(right_path) {
+                                    cells_to_check[cells_to_check_count++] = right_cell;
+                                }
+                                if(top_path) {
+                                    cells_to_check[cells_to_check_count++] = top_cell;
+                                }
+                                
+                                cells_visited[cells_visited_count++] = check_p;
+                                
+                                ASSERT(cells_to_check_count <= cells_to_check_capacity);
+                                ASSERT(cells_visited_count <= cells_visited_capacity);
+                            }
+                            
+                            v2 final_p = sdf_to_working_set(best_sdf_cell, best_sdf_uv);
+                            
+                            batch->ps[entity_index] = final_p;
+                        } break;
+                        
+                        case Entity_Type::BULLET: {
+                            // Raycast.
+                            bool hit = false;
+                            
+                            f32 dist_remaining = f_sqrt(dp_length_sq);
+                            v2 dp_n = dp / dist_remaining;
+                            v2 at = p;
+                            while(dist_remaining > 0.0f) {
+                                v2s cell;
+                                v2 uv;
+                                working_set_to_sdf(at, &cell, &uv);
+                                
+                                v2s tile_p = cell / TILE_SDF_RESOLUTION;
+                                v2s cell_p = cell % TILE_SDF_RESOLUTION;
+                                
+                                f32 *sdf = g->sdfs_by_tile[tile_p.y * WORKING_SET_GRID_WIDTH + tile_p.x];
+                                
+                                sdf_sample4(sdf, cell_p.x, cell_p.y, radius, dist);
+                                
+                                f32 sd = f_sample_bilinear(dist[0], dist[1], dist[2], dist[3], uv);
+                                sd = f_min(sd, dist_remaining);
+                                
+                                
+                                at += dp_n * sd;
+                                dist_remaining -= sd;
+                                
+                                if(sd <= 0.0f) {
+                                    hit = true;
+                                    break;
+                                }
+                            }
+                            
+                            if(hit) {
+                                // We just want to stop the entity for this phase of the frame, since entity logic
+                                // is run after this; we could just log the fact that we hit level geometry here?
+                                g->bullets.hit_level_geometry[entity_index] = true;
+                            }
+                            
+                            batch->ps[entity_index] = at;
+                        } break;
+                    }
+                }
             }
         }
     }
@@ -869,115 +1354,74 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
     //
     // Emit overlap queries.
     
-    { // Snapping partners in position.
-        // The partner P is a direct snap.
-        // However, we wait until after the collision resolve to do it because we want to make sure the position
-        // is correct, which it wouldn't be if we snapped and the player ended up hitting a wall and getting nudged out of it.
-        v2 player_p = g->players.ps[g->current_player];
-        v2 xhair_offset = g->xhair_offset;
-        v2 xhair_p = xhair_offset + player_p;
-        FORI(0, g->partners.count) {
-            g->partners.ps[i] = xhair_p + g->partners.offsets[i];
+    { // Player attack.
+        FORI_NAMED(player_index, 0, g->players.count) {
+            cap2 hitcap = g->players.weapon_hitcaps[player_index];
+            
+            if(hitcap.radius) {
+                FORI_NAMED(turret_index, 0, g->turrets.count) {
+                    v2 turret_p = g->turrets.ps[turret_index];
+                    
+                    if(disk_capsule_overlap(turret_p, TURRET_RADIUS, hitcap.a, hitcap.b, hitcap.radius)) {
+                        mark_entity_for_removal(g, Entity_Type::TURRET, CAST(s32, turret_index));
+                    }
+                }
+            }
         }
     }
     
     { // Bullet overlaps.
         const s32 bullets = g->bullets.count;
+        const f32 radius = BULLET_RADIUS;
         
-        FORI_TYPED_NAMED(s32, ib, 0, bullets) {
-            const v2   bp                 = g->bullets.ps[ib];
-            const bool explodes_on_impact = g->bullets.explodes_on_impact[ib];
-            f32 radius           = BULLET_RADIUS;
-            f32 explosion_radius = BULLET_EXPLOSION_RADIUS;
-            bool hit_any = false;
+        FORI_NAMED(bullet_index, 0, bullets) {
+            v2 p = g->bullets.ps[bullet_index];
+            bool hit_level_geometry = g->bullets.hit_level_geometry[bullet_index];
             
-            bullet_overlap_begin:
-            FORI_TYPED(u32, 0, ARRAY_LENGTH(disk_entity_types_for_arrays)) {
-                v2 *typed_ps = disk_p_arrays[i];
-                const f32 typed_radius = disk_radii_for_arrays[i];
-                const u8 type = disk_entity_types_for_arrays[i];
-                const s32 count = disk_counts_for_arrays[i];
+            f32 player_radius = PLAYER_RADIUS;
+            FORI_NAMED(player_index, 0, g->players.count) {
+                v2 player_p = g->players.ps[player_index];
                 
-                FORI_TYPED_NAMED(s32, typed, 0, count) {
-                    if(!disk_disk_overlap(bp, radius, typed_ps[typed], typed_radius)) {
-                        continue;
-                    }
-                    
-                    // We've detected an overlap.
-                    
-                    // @Speed @Hack?!? We probably want to handle explosions separately.
-                    if((radius != explosion_radius) && explodes_on_impact) {
-                        radius = explosion_radius;
-                        goto bullet_overlap_begin;
-                    }
-                    
-                    hit_any = true;
-                    mark_entity_for_removal(g, type, typed);
+                if(disk_disk_overlap(p, radius, player_p, player_radius)) {
+                    mark_entity_for_removal(g, Entity_Type::PLAYER, CAST(s32, player_index));
                 }
             }
             
-            FORI_TYPED(u32, 0, ARRAY_LENGTH(obb_entity_types_for_arrays)) {
-                v2 *typed_ps = obb_p_arrays[i];
-                const v2 typed_halfdim = obb_halfdims_for_arrays[i];
-                const u8 type = obb_entity_types_for_arrays[i];
-                const s32 count = obb_counts_for_arrays[i];
-                
-                FORI_TYPED_NAMED(s32, typed, 0, count) {
-                    if(!disk_obb_overlap(bp, radius, typed_ps[typed], typed_halfdim, V2(1.0f, 0.0f))) {
-                        continue;
-                    }
-                    
-                    // We've detected an overlap.
-                    
-                    // @Speed @Hack?!? We probably want to handle explosions separately.
-                    if((radius != explosion_radius) && explodes_on_impact) {
-                        radius = explosion_radius;
-                        goto bullet_overlap_begin;
-                    }
-                    
-                    hit_any = true;
-                    mark_entity_for_removal(g, type, typed);
-                }
-            }
-            
-            if(hit_any) {
-                mark_entity_for_removal(g, ENTITY_TYPE_BULLET, ib);
+            if(hit_level_geometry) {
+                mark_entity_for_removal(g, Entity_Type::BULLET, CAST(s32, bullet_index));
             }
         }
     }
     
-    { // Dog overlaps.
-        const s32 count = g->dogs.count;
-        FORI(0, count) {
-            v2 p = g->dogs.ps[i];
+    { // Item pickup.
+        const s32 count = g->players.count;
+        
+        FORI_NAMED(player_index, 0, count) {
+            v2 p = g->players.ps[player_index];
+            ssize selection = -1;
             
-            FORI_TYPED_NAMED(s32, partner, 0, g->partners.count) {
-                if(disk_obb_overlap(p, DOG_RADIUS * DOG_RADIUS, g->partners.ps[partner], V2(PARTNER_HALFWIDTH, PARTNER_HALFHEIGHT), V2(1.0f, 0.0f))) {
-                    mark_entity_for_removal(g, ENTITY_TYPE_PARTNER, partner);
+            FORI_NAMED(item_index, 0, g->items.count) {
+                v2 item_p = g->items.ps[item_index];
+                
+                if(disk_disk_overlap(p, PLAYER_RADIUS, item_p, ITEM_PICKUP_RADIUS)) {
+                    selection = item_index;
                 }
             }
-        }
-    }
-    
-    { // Wall turret overlaps.
-        const s32 count = g->wall_turrets.count;
-        FORI(0, count) {
-            v2 p = g->wall_turrets.ps[i];
             
-            f32 dist_sq;
-            v2 wall_direction;
-            v2 target_p = closest_in_array_with_direction(p, g->players.ps, g->players.count, &dist_sq, &wall_direction);
-            
-            FORI_TYPED_NAMED(s32, partner, 0, g->partners.count) {
-                v2 to_partner = g->partners.ps[partner] - p;
+            if((selection != -1) && BUTTON_PRESSED(in, use)) {
+                // Pick up the item.
+                Item_Contents *contents = &g->items.contents[selection];
                 
-                f32 from_ray = f_abs(v2_inner(to_partner, v2_perp(wall_direction)));
-                f32 towards_ray = v2_inner(to_partner, wall_direction);
-                
-                if((towards_ray > 0.0f) && (from_ray < (PARTNER_HALFWIDTH))) {
-                    mark_entity_for_removal(g, ENTITY_TYPE_PARTNER, partner);
+                switch(contents->type) {
+                    case Item_Type::WEAPON: {
+                        SWAP(contents->weapon.type, g->players.weapons[player_index].type);
+                    } break;
+                    
+                    default: UNHANDLED;
                 }
             }
+            
+            g->players.item_selections[player_index] = CAST(s32, selection);
         }
     }
     
@@ -985,77 +1429,244 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
     // At this point, all collision results should be available.
     //
     
-    { // Processing entity deaths.
-        // We're assuming that we don't have duplicate deaths.
-        FORI(0, g->removals.count) {
-            u8 type = g->removals.types[i];
-            s32 index = g->removals.indices[i];
+    //
+    // Maybe updating working set position. (This is possibly where we'll fire off streaming requests later on?)
+    //
+    if(non_visual_update) {
+        v2s working_set_tile_p = g->working_set_tile_p;
+        v2 player_p = g->players.ps[g->current_player];
+        
+        v2s working_set_tile_dp = V2S();
+        
+#define NUDGE_COORD(coord) { \
+            if(player_p.##coord < -MAP_TILE_HALFDIM) { \
+                working_set_tile_dp.##coord -= 1; \
+            } else if(player_p.##coord > MAP_TILE_HALFDIM) { \
+                working_set_tile_dp.##coord += 1; \
+            } \
+        }
+        
+        NUDGE_COORD(x);
+        NUDGE_COORD(y);
+#undef NUDGE_COORD
+        
+        if(working_set_tile_dp.x || working_set_tile_dp.y) {
+            v2s new_working_set_tile_p = working_set_tile_p + working_set_tile_dp;
             
-            switch(type) {
-                case ENTITY_TYPE_PLAYER:
-                case ENTITY_TYPE_PARTNER: {
+            // If we're on the map boundary, skip.
+            if((new_working_set_tile_p.x > 0) && (new_working_set_tile_p.x < g->storage.dim.x) &&
+               (new_working_set_tile_p.y > 0) && (new_working_set_tile_p.y < g->storage.dim.y)) {
+                { // Update the working tile set.
+                    FORI_TYPED_NAMED(s32, y_offset, -1, 2) {
+                        s32 grid_y = new_working_set_tile_p.y + y_offset;
+                        s32 row_offset = grid_y * g->storage.dim.x;
+                        
+                        FORI_TYPED_NAMED(s32, x_offset, -1, 2) {
+                            s32 grid_x = new_working_set_tile_p.x + x_offset;
+                            Game_Tile *tile = get_stored_tile(&g->storage, V2S(CAST(s32, grid_x), CAST(s32, grid_y)));
+                            
+                            g->sdfs_by_tile[(y_offset + 1) * WORKING_SET_GRID_WIDTH + (x_offset + 1)] = tile->sdf;
+                            v2 tile_offset = V2(grid_x - working_set_tile_p.x, grid_y - working_set_tile_p.y) * MAP_TILE_DIM;
+                            
+                            Entity_Block *block = &tile->entities;
+                            while(block) {
+                                ssize offset = 0;
+                                FORI(0, block->header.count) {
+                                    Serialized_Entity_Header *header = CAST(Serialized_Entity_Header *, block->data + offset);
+                                    
+                                    switch(header->type) {
+                                        case Entity_Type::TURRET: {
+                                            Serialized_Turret *turret = CAST(Serialized_Turret *, header);
+                                            
+                                            v2 p = tile_offset + turret->p;
+                                            
+                                            add_turret(g, p);
+                                            offset += sizeof(Serialized_Turret);
+                                        } break;
+                                        
+                                        case Entity_Type::TREE: {
+                                            Serialized_Tree *tree = CAST(Serialized_Tree *, header);
+                                            
+                                            v2 p = tile_offset + tree->p;
+                                            
+                                            add_tree(g, p);
+                                            offset += sizeof(Serialized_Tree);
+                                        } break;
+                                        
+                                        case Entity_Type::ITEM: {
+                                            Serialized_Item *item = CAST(Serialized_Item *, header);
+                                            
+                                            v2 p = tile_offset + item->p;
+                                            
+                                            add_item(g, p, item->contents);
+                                            offset += sizeof(Serialized_Item);
+                                        } break;
+                                        
+                                        default: UNHANDLED;
+                                    }
+                                }
+                                
+                                block->header.count = 0;
+                                block->header.allocated = 0;
+                                
+                                Entity_Block *empty_block = block;
+                                
+                                block = block->header.next;
+                                
+                                if(empty_block != &tile->entities) {
+                                    // Recycle it.
+                                    empty_block->header.next = g->storage.free_entity_blocks;
+                                    g->storage.free_entity_blocks = empty_block;
+                                } else {
+                                    empty_block->header.next = 0;
+                                }
+                            }
+                        }
+                    }
+                    
+                    g->working_set_tile_p = new_working_set_tile_p;
+                }
+                
+                { // Renormalize working set coordinates.
+                    v2 dp = -V2(working_set_tile_dp) * MAP_TILE_DIM;
+                    struct {
+                        v2 *ps;
+                        s32 count;
+                        u8 type;
+                    } position_batches[] = {
+                        {
+                            g->players.ps,
+                            g->players.count,
+                            Entity_Type::PLAYER,
+                        },
+                        {
+                            g->turrets.ps,
+                            g->turrets.count,
+                            Entity_Type::TURRET,
+                        },
+                        {
+                            g->bullets.ps,
+                            g->bullets.count,
+                            Entity_Type::BULLET,
+                        },
+                        {
+                            g->trees.ps,
+                            g->trees.count,
+                            Entity_Type::TREE,
+                        },
+                        {
+                            g->items.ps,
+                            g->items.count,
+                            Entity_Type::ITEM,
+                        },
+                    };
+                    
+                    rect2 working_set_bounds = rect2_minmax(V2(-WORKING_SET_HALFDIM), V2(WORKING_SET_HALFDIM));
+                    FORI_NAMED(batch_index, 0, ARRAY_LENGTH(position_batches)) {
+                        auto batch = position_batches[batch_index];
+                        
+                        FORI_NAMED(p_index, 0, batch.count) {
+                            v2 p = batch.ps[p_index];
+                            
+                            v2 displaced_p = p + dp;
+                            if(!v2_in_rect2(displaced_p, working_set_bounds)) {
+                                ASSERT(batch.type != Entity_Type::PLAYER);
+                                // Unload it.
+                                
+                                // @Flags: Entity_Flag::PERSISTENT
+                                if((batch.type == Entity_Type::TURRET) || (batch.type == Entity_Type::TREE) || (batch.type == Entity_Type::ITEM)) {
+                                    // Put it back in a tile.
+                                    
+                                    // @Cleanup: Use Precise_Position here instead?
+                                    v2f64 global = V2F64(displaced_p) + V2F64(g->working_set_tile_p) * MAP_TILE_DIM;
+                                    
+                                    switch(batch.type) {
+                                        case Entity_Type::TURRET: {
+                                            place_turret(&g->storage, global);
+                                        } break;
+                                        
+                                        case Entity_Type::TREE: {
+                                            place_tree(&g->storage, global);
+                                        } break;
+                                        
+                                        case Entity_Type::ITEM: {
+                                            place_item(&g->storage, global, g->items.contents[p_index]);
+                                        } break;
+                                        
+                                        default: UNHANDLED;
+                                    }
+                                }
+                                
+                                // Either way, remove it from the working set.
+                                mark_entity_for_removal(g, batch.type, CAST(s32, p_index));
+                            } else {
+                                batch.ps[p_index] = displaced_p;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    { // Processing entity removals.
+        // We're assuming that we don't have duplicate deaths.
+        FORI(0, g->entity_removal_count) {
+            Entity_Reference *removal = &g->entity_removals[i];
+            s32 index = removal->index;
+            
+            switch(removal->type) {
+                case Entity_Type::PLAYER: {
                     g->lost = true;
                 } break;
                 
-                case ENTITY_TYPE_BULLET: {
-                    s32 replace = g->bullets.count - 1;
+                case Entity_Type::BULLET: {
+                    s32 replace = --g->bullets.count;
                     ASSERT(replace >= 0);
                     
                     g->bullets.ps                [index] = g->bullets.ps                [replace];
                     g->bullets.directions        [index] = g->bullets.directions        [replace];
                     g->bullets.speeds            [index] = g->bullets.speeds            [replace];
-                    g->bullets.explodes_on_impact[index] = g->bullets.explodes_on_impact[replace];
-                    
-                    g->bullets.count -= 1;
+                    g->bullets.hit_level_geometry[index] = false;
                 } break;
                 
-                case ENTITY_TYPE_TURRET: {
-                    s32 replace = g->turrets.count - 1;
+                case Entity_Type::TURRET: {
+                    s32 replace = --g->turrets.count;
                     ASSERT(replace >= 0);
                     
                     g->turrets.ps       [index] = g->turrets.ps       [replace];
                     g->turrets.cooldowns[index] = g->turrets.cooldowns[replace];
-                    
-                    g->turrets.count -= 1;
                 } break;
                 
-                case ENTITY_TYPE_DOG: {
-                    s32 replace = g->dogs.count - 1;
+                case Entity_Type::TREE: {
+                    s32 replace = --g->trees.count;
                     ASSERT(replace >= 0);
                     
-                    g->dogs.ps          [index] = g->dogs.ps          [replace];
-                    g->dogs.dps         [index] = g->dogs.dps         [replace];
-                    
-                    g->dogs.count -= 1;
+                    g->trees.ps[index] = g->trees.ps[replace];
                 } break;
                 
-                case ENTITY_TYPE_WALL_TURRET: {
-                    s32 replace = g->wall_turrets.count - 1;
+                case Entity_Type::ITEM: {
+                    s32 replace = --g->items.count;
                     ASSERT(replace >= 0);
                     
-                    g->wall_turrets.ps  [index] = g->wall_turrets.ps  [replace];
-                    
-                    g->wall_turrets.count -= 1;
+                    g->items.ps[index] = g->items.ps[replace];
+                    g->items.contents[index] = g->items.contents[replace];
                 } break;
+                
+                default: UNHANDLED;
             }
-            
-            // Either way, we log it.
-            // @Incomplete: Once we know what information we want out of this,
-            // do something better than % when our queue is full.
-            g->logged_removals.types[g->logged_removals.count++] = type;
-            g->logged_removals.count %= MAX_LIVE_ENTITY_COUNT;
         }
         
-        g->removals.count = 0;
-    }
-    
-    if(!g->targets.count) {
-        g->desired_level_index += 1;
+        g->entity_removal_count = 0;
     }
     
     //
     // Frame end
     //
+    
+    if(g->lost) {
+        g->players.count = 0;
+    }
     
     advance_input(_in);
 }
@@ -1065,62 +1676,70 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
     if(g->current_level_index) {
         const u32 focused_player = g->current_player;
         const v2 camera_p = g->players.ps[focused_player];
-        v2 camera_dir = V2(1.0f, 0.0f);
+        const v2 camera_dir = V2(1.0f, 0.0f);
         const f32 camera_zoom = g->camera_zoom;
         const v2 viewport_halfdim = V2(GAME_ASPECT_RATIO_X, GAME_ASPECT_RATIO_Y) * camera_zoom * 0.5f;
-        const v2 map_halfdim = g->map_halfdim;
-        const v2 map_dim = map_halfdim * 2.0f;
-        
-        const v4 anti_player_color = V4(1.0f, 0.0f, 0.0f, 1.0f);
-        const v4 anti_partner_color = V4(0.0f, 0.0f, 1.0f, 1.0f);
-        const v4 anti_all_color = anti_player_color + anti_partner_color;
         
         render_set_transform_game_camera(command_queue->command_list_handle, camera_p, camera_dir, camera_zoom);
         
         { // Players
             const u32 count = g->players.count;
-            const u16 handle = GET_MESH_HANDLE(renderer, ball);
+            const u16 handle = GET_MESH_HANDLE(renderer, player);
             
-            Mesh_Instance instance = {};
-            instance.color = V4(1.0f);
-            instance.rot = V2(1.0f, 0.0f);
-            instance.scale = V2(1.0f, 1.0f);
+            const v2 view_dir = v2_normalize(g->xhair_offset);
+            const v2 rotation = -v2_perp(view_dir);
             
-            for(u32 i = 0; i < count; ++i) {
-                instance.offset = g->players.ps[i];
+            {
+                Mesh_Instance instance = {};
+                instance.color = V4(1.0f);
+                instance.scale = V2(PLAYER_RADIUS * 2.0f);
+                instance.rot = rotation;
                 
-                render_mesh(command_queue, handle, &instance);
+                for(u32 i = 0; i < count; ++i) {
+                    instance.offset = g->players.ps[i];
+                    
+                    render_quad(renderer, command_queue, &instance);
+                }
             }
-        }
-        
-        { // Partner
-            const u32 count = g->partners.count;
-            const u16 handle = GET_MESH_HANDLE(renderer, partner);
             
-            Mesh_Instance instance;
-            instance.color = V4(1.0f);
-            instance.rot = V2(1.0f, 0.0f);
-            instance.scale = V2(1.0f);
-            
-            FORI(0, count) {
-                instance.offset = g->partners.ps[i];
-                
-                render_mesh(command_queue, handle, &instance);
+            {
+                Mesh_Instance hitcap = {};
+                hitcap.color = V4(1.0f, 0.0f, 0.0f, 1.0f);
+                hitcap.scale = V2(PLAYER_HITCAP_RANGE - PLAYER_HITCAP_RADIUS - PROJECTILE_SPAWN_DIST_EPSILON - PLAYER_RADIUS, PLAYER_HITCAP_RADIUS * 2.0f);
+                FORI(0, count) {
+                    if(g->players.animation_states[i].animating) {
+                        cap2 cap = g->players.weapon_hitcaps[i];
+                        
+                        hitcap.offset = (cap.a + cap.b) * 0.5f;
+                        hitcap.rot = v2_normalize(cap.b - cap.a);
+                        
+                        render_quad(renderer, command_queue, &hitcap);
+                    }
+                }
             }
         }
         
         { // Trees
             const s32 count = g->trees.count;
+            Mesh_Instance *instances = reserve_instances(command_queue, GET_MESH_HANDLE(renderer, quad), 2 * count);
             
-            Mesh_Instance instance;
-            instance.color = V4(0.0f, 0.1f, 0.0f, 1.0f);
-            instance.rot = V2(1.0f, 0.0f);
-            instance.scale = V2(1.0f);
+            Mesh_Instance trunk;
+            trunk.color = V4(0.2f, 0.1f, 0.0f, 1.0f);
+            trunk.rot = V2(1.0f, 0.0f);
+            trunk.scale = V2(TREE_RADIUS * 2.0f);
+            
+            Mesh_Instance leaves;
+            leaves.color = V4(0.2f, 0.8f, 0.0f, 1.0f);
+            leaves.rot = V2(1.0f, 0.0f);
+            leaves.scale = V2(1.0f, 1.0f);
             
             FORI(0, count) {
-                instance.offset = g->trees.ps[i];
+                trunk.offset = g->trees.ps[i];
+                trunk.offset.y += trunk.scale.y * 0.5f;
+                leaves.offset = trunk.offset + V2(0.0f, 0.7f);
                 
-                render_quad(renderer, command_queue, &instance);
+                instances[i << 1] = trunk;
+                instances[(i << 1) + 1] = leaves;
             }
         }
         
@@ -1130,7 +1749,7 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
             Mesh_Instance instance;
             instance.color = V4(0.3f, 0.1f, 0.1f, 1.0f);
             instance.rot = V2(1.0f, 0.0f);
-            instance.scale = V2(1.0f);
+            instance.scale = V2(TURRET_RADIUS * 2.0f);
             
             FORI(0, count) {
                 instance.offset = g->turrets.ps[i];
@@ -1143,9 +1762,9 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
             const s32 count = g->bullets.count;
             
             Mesh_Instance instance;
-            instance.color = anti_all_color;
+            instance.color = V4(1.0f, 0.0f, 0.0f, 1.0f);
             instance.rot = V2(1.0f, 0.0f);
-            instance.scale = V2(1.0f);
+            instance.scale = V2(BULLET_RADIUS * 2.0f);
             
             FORI(0, count) {
                 instance.offset = g->bullets.ps[i];
@@ -1154,57 +1773,82 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
             }
         }
         
-        { // Dogs
-            const s32 count = g->dogs.count;
+        { // Items
+            const s32 count = g->items.count;
             
             Mesh_Instance instance;
-            instance.color = anti_partner_color;
-            instance.rot = V2(1.0f, 0.0f);
-            instance.scale = V2(1.0f);
+            instance.rot = V2(0.707f, 0.707f);
+            instance.scale = V2(ITEM_PICKUP_RADIUS);
             
             FORI(0, count) {
-                const v2 p = g->dogs.ps[i];
+                instance.offset = g->items.ps[i];
+                
+                instance.color = V4(0.0f, 0.8f, 0.2f, 1.0f);
+                if(g->players.item_selections[0] == i) {
+                    instance.color = V4(1.0f, 0.8f, 0.4f, 1.0f);
+                }
                 
                 render_quad(renderer, command_queue, &instance);
             }
         }
         
 #if 0
-        { // Wall turrets.
-            const v4 color = V4(0.1f, 0.1f, 0.3f, 1.0f);
-            const s32 count = g->wall_turrets.count;
-            
-            Mesh_Instance instance;
-            instance.color = anti_all_color;
+        { // SDF.
+            Mesh_Instance instance = {};
+            instance.scale = V2(0.1f);
             instance.rot = V2(1.0f, 0.0f);
-            instance.scale = V2(1.0f);
             
-            FORI(0, count) {
-                const v2 p = g->wall_turrets.ps[i];
-                const v2 halfdim = V2(WALL_TURRET_HALFWIDTH, WALL_TURRET_HALFHEIGHT);
-                
-                // @Speed: We're already computing this in full_update.
-                f32 dist_sq;
-                v2 wall_dir;
-                const v2 target_p = closest_in_array_with_direction(p, g->players.ps, g->players.count, &dist_sq, &wall_dir);
-                
-                { // Drawing the partner wall.
-                    // @Incomplete: We're drawing the ray from the turret, so going far enough away from it makes it so we can see
-                    // the end of it.
-                    // Right now, we don't care because our test map is simple and because we might add an actual maximum length
-                    // for the wall anyway.
-                    f32 ray_length = f_sqrt(map_dim.x*map_dim.x + map_dim.y*map_dim.y);
-                    v2 pts[] = {
-                        p,
-                        p + wall_dir * ray_length,
-                    };
-                    queue_line_strip(renderer, pts, ARRAY_LENGTH(pts), 0.01f, anti_partner_color);
+            v2s cell_p = working_set_to_cell(g->players.ps[g->current_player]);
+            v2s tile_p = cell_p / TILE_SDF_RESOLUTION;
+            v2s local_cell = cell_p % TILE_SDF_RESOLUTION;
+            
+            f32 *sdf = g->sdfs_by_tile[tile_p.y * WORKING_SET_GRID_WIDTH + tile_p.x];
+            FORI_TYPED_NAMED(s32, y, 0, TILE_SDF_RESOLUTION + 1) {
+                FORI_TYPED_NAMED(s32, x, 0, TILE_SDF_RESOLUTION + 1) {
+                    
+                    if(s_max(s_abs(x - local_cell.x), s_abs(y - local_cell.y)) < 4) {
+                        f32 distance = sdf[y * PADDED_TILE_SDF_RESOLUTION + x];
+                        
+                        instance.offset = -V2(WORKING_SET_HALFDIM) + V2(MAP_TILE_DIM * tile_p.x, MAP_TILE_DIM * tile_p.y) + V2(x, y) * SDF_TO_GAME_FACTOR;
+                        instance.color = V4(f_clamp01(distance));
+                        
+                        render_quad(renderer, command_queue, &instance);
+                    }
                 }
-                
-                queue_quad(renderer, blank_texture, p, halfdim, V2(1.0f, 0.0f), color);
+            }
+        }
+#else
+        { // Tiles.
+            Mesh_Instance instance = {};
+            instance.scale = V2(MAP_TILE_DIM);
+            instance.rot = V2(1.0f, 0.0f);
+            instance.color = V4(1.0f, 1.0f, 0.0f, 1.0f);
+            
+            FORI_TYPED_NAMED(s32, tile_y, g->working_set_tile_p.y - 1, g->working_set_tile_p.y + 2) {
+                FORI_TYPED_NAMED(s32, tile_x, g->working_set_tile_p.x - 1, g->working_set_tile_p.x + 2) {
+                    Precise_Position precise;
+                    precise.tile = V2S(tile_x, tile_y);
+                    precise.local = V2(MAP_TILE_DIM * 0.5f);
+                    
+                    v2 tile_center = precise_to_working_set(precise, g->working_set_tile_p);
+                    
+                    instance.offset = tile_center;
+                    
+                    render_quad_outline(renderer, command_queue, &instance, 0.25f);
+                }
             }
         }
 #endif
+        
+        {
+            Mesh_Instance xhair = {};
+            xhair.offset = camera_p + g->xhair_offset;
+            xhair.scale = V2(0.1f);
+            xhair.rot = V2(0.707f, 0.707f);
+            xhair.color = V4(1.0f);
+            
+            render_quad(renderer, command_queue, &xhair);
+        }
     }
     
     maybe_flush_draw_commands(command_queue);
@@ -1262,6 +1906,44 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
     Text_Info      * const   text_info = &info->text;
     Synth          * const       synth = &info->synth;
     
+    { // Game state
+        Game_Map_Storage *storage = &g_cl->g.storage;
+        
+        s32 grid_width = f_ceil_s(TEST_MAP_WIDTH / MAP_TILE_DIM);
+        s32 grid_height = f_ceil_s(TEST_MAP_HEIGHT / MAP_TILE_DIM);
+        s32 tile_count = grid_width * grid_height;
+        
+        storage->dim = V2S(grid_width, grid_height);
+        
+        {
+            ssize entity_block_count = IDIV_ROUND_UP(MAX_SERIALIZED_ENTITY_SIZE * tile_count * MAX_LIVE_ENTITY_COUNT, 9 * ENTITY_BLOCK_DATA_SIZE);
+            Entity_Block *entity_blocks = push_array(game_block, Entity_Block, entity_block_count);
+            
+            Entity_Block *previous = &entity_blocks[0];
+            previous->header.next = 0;
+            previous->header.count = 0;
+            FORI(1, entity_block_count) {
+                Entity_Block *block = &entity_blocks[i];
+                
+                previous->header.next = block;
+                block->header.next = 0;
+                block->header.count = 0;
+                
+                previous = block;
+            }
+        }
+        
+        storage->tiles = push_array(game_block, Game_Tile, tile_count);
+        
+        FORI(0, tile_count) {
+            Game_Tile *tile = &storage->tiles[i];
+            
+            tile->sdf = push_array(game_block, f32, PADDED_TILE_SDF_RESOLUTION * PADDED_TILE_SDF_RESOLUTION);
+        }
+        
+        load_dumb_level(&g_cl->g);
+    }
+    
     { // Loading the config file.
         bool need_to_load_default_config = true;
         
@@ -1304,6 +1986,7 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
                 BIND_BUTTON(program_state->input_settings.bindings,    jump,   SPACEBAR);
                 BIND_BUTTON(program_state->input_settings.bindings,     run,     LSHIFT);
                 BIND_BUTTON(program_state->input_settings.bindings,  crouch,      LCTRL);
+                BIND_BUTTON(program_state->input_settings.bindings,     use,          E);
                 
                 BIND_BUTTON(program_state->input_settings.bindings,  editor,         F1);
                 BIND_BUTTON(program_state->input_settings.bindings, profiler,        F2);
@@ -1346,13 +2029,13 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         Render_Command_Queue *command_queue = get_current_command_queue(renderer);
         
         { // Load meshes.
-            // u16 player_mesh_handle = load_mesh(renderer, command_queue, READ_ENTIRE_ASSET(&temporary_memory, &g_cl->assets.datapack, player, mesh));
+            u16 player_mesh_handle  = load_mesh(renderer, command_queue, READ_ENTIRE_ASSET(&temporary_memory, &g_cl->assets.datapack, player,  mesh));
             u16 partner_mesh_handle = load_mesh(renderer, command_queue, READ_ENTIRE_ASSET(&temporary_memory, &g_cl->assets.datapack, partner, mesh));
-            u16 ball_mesh_handle = load_mesh(renderer, command_queue, READ_ENTIRE_ASSET(&temporary_memory, &g_cl->assets.datapack, ball, mesh));
+            u16 ball_mesh_handle    = load_mesh(renderer, command_queue, READ_ENTIRE_ASSET(&temporary_memory, &g_cl->assets.datapack, ball,    mesh));
             
-            // put_mesh(renderer, Mesh_Uid::player, player_mesh_handle);
+            put_mesh(renderer, Mesh_Uid::player,  player_mesh_handle);
             put_mesh(renderer, Mesh_Uid::partner, partner_mesh_handle);
-            put_mesh(renderer, Mesh_Uid::ball, ball_mesh_handle);
+            put_mesh(renderer, Mesh_Uid::ball,    ball_mesh_handle);
         }
         
         { // Default edit mesh.
@@ -1430,6 +2113,9 @@ void Implicit_Context::clone_game_state(Game *source, Game *clone) {
     TIME_BLOCK;
     
     mem_copy(source, clone, sizeof(Game));
+    
+    // We may need to do more if we have dynamically allocated RW data, which is not the case right now;
+    // map_sdf is the only dynamic allocation we have, and it's R data.
 }
 
 static void update_menu(Menu *menu, Input *in) {
@@ -1466,7 +2152,7 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     global_log->temporary_buffer.length = 0;
     global_log->heads_up_alpha -= (f32)real_dt;
     
-    static bool in_mesh_editor = true;
+    static bool in_mesh_editor = false;
     // We copy input because it's overall more robust to transitions.
     Input game_input = program_state->input;
     Input menu_input = program_state->input;
@@ -1570,36 +2256,37 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
     s16* update_buffer = update_synth(&info->synth, samples_to_update);
     os_platform.end_sound_update(update_buffer, samples_to_update);
     
-    // Rendering:
-    if(program_state->should_render) {
-        
-        render_begin_frame_and_clear(renderer, V4(1.0f, 0.0f, 1.0f, 1.0f));
+    { // Rendering:
+        render_begin_frame_and_clear(renderer, V4(0.03f, 0.07f, 0.015f, 1.0f));
         Render_Command_Queue *command_queue = get_current_command_queue(renderer);
         
-        if(in_mesh_editor) {
-            mesh_update(&info->mesh_editor, renderer, &menu_input, command_queue);
-            
-            program_state->input = menu_input;
-        } else {
-            
-            draw_game_single_threaded(renderer, command_queue, &g_cl->visual_state, &g_cl->assets);
-            
-            render_set_transform_right_handed_unit_scale(command_queue->command_list_handle);
-            
-            // Drawing UI:
-            if(g_cl->in_menu) {
-                f32 render_target_height = CAST(f32, program_state->draw_rect.top - program_state->draw_rect.bottom);
-                // @XX
-                // draw_menu(menu, g_cl, renderer, text_info, render_target_height);
-            }
-            
-            if((global_log->heads_up_buffer.length > 0) && (global_log->heads_up_alpha > 0.0f)) {
-                // @XX
-                // text_add_string(text_info, renderer, global_log->heads_up_buffer, V2(0.5f, 0.8f), 0.15f, FONT_MONO, true);
-            }
-            
-            if(text_info->strings.count) {
-                text_update(text_info, renderer);
+        // @Cleanup: We might want to remove this, or make it change the vsync interval, or something.
+        if(program_state->should_render || 1) {
+            if(in_mesh_editor) {
+                mesh_update(&info->mesh_editor, renderer, &menu_input, command_queue);
+                
+                program_state->input = menu_input;
+            } else {
+                
+                draw_game_single_threaded(renderer, command_queue, &g_cl->visual_state, &g_cl->assets);
+                
+                render_set_transform_right_handed_unit_scale(command_queue->command_list_handle);
+                
+                // Drawing UI:
+                if(g_cl->in_menu) {
+                    f32 render_target_height = CAST(f32, program_state->draw_rect.top - program_state->draw_rect.bottom);
+                    // @XX
+                    // draw_menu(menu, g_cl, renderer, text_info, render_target_height);
+                }
+                
+                if((global_log->heads_up_buffer.length > 0) && (global_log->heads_up_alpha > 0.0f)) {
+                    // @XX
+                    // text_add_string(text_info, renderer, global_log->heads_up_buffer, V2(0.5f, 0.8f), 0.15f, FONT_MONO, true);
+                }
+                
+                if(text_info->strings.count) {
+                    text_update(text_info, renderer);
+                }
             }
         }
         

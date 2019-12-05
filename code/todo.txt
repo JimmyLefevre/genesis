@@ -2,9 +2,15 @@
 //
 // CURRENT:
 //
+Collision:
+- Broad phase.
+
+Map stuff:
+- Add streaming from disk. :SaveGames
+
 Graphics:
+- Add texture support back in.
 - Replace game graphics with meshes.
-- Replace fonts with meshes.
 - Add Z to Render_Vertex.
 
 Audio:
@@ -20,23 +26,7 @@ Audio:
 //
 // CONTENT:
 //
-Game:
-- Walls that stop crosshairs.
--   Some ideas:
--     Absolute walls that come from the side of the screen and have a hole in them.
--       Can we make this work with the player-controlled camera?
--       Are enemies that have a specific attack range/angle (cf. TBoI Greed) a good enough replacement?
--     Enemies with a weakspot, say in the back.
-- Try some interesting stuff with NPlayers/NPartners.
--   Controls to rotate/spread out/gather crosshair formation?
--   Sharing crosshairs across multiple players.
-- Wave spawn system:
--   Log types and order of kills. (Basic version done!)
--   Spawn enemies based on that.
-- Color the player/partner so that they correspond to anti-player/anti-partner colors.
-
 - After a level load, wait on updating the game until the player tries to act.
-- Properly telegraph enemy spawns.
 
 Controls:
 - Make a rebinding menu.
@@ -46,7 +36,7 @@ Controls:
 // ENGINE:
 //
 
-Differenciate between GENESIS_DEV and a new GENESIS_DEBUG flag.
+Differenciate between GENESIS_DEV and a new GENESIS_DEBUG flag?
 
 Mesh editor:
 - Functionality:

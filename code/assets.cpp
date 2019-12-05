@@ -98,7 +98,7 @@ static inline s32 midi_decodemod_and_advance(u8 **at) {
         result = (result << 7) | *_at;
     }
     
-    return CAST(s32, result);
+    return result;
 }
 
 //

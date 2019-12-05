@@ -107,6 +107,36 @@ static inline void render_quad(Renderer *renderer, Render_Command_Queue *queue, 
     render_meshes(queue, GET_MESH_HANDLE(renderer, quad), instance, 1);
 }
 
+static void render_quad_outline(Renderer *renderer, Render_Command_Queue *queue, Mesh_Instance *instance, f32 thickness) {
+    Mesh_Instance outline[4];
+    
+    v2 center = instance->offset;
+    v2 x_axis = v2_complex_prod(V2(instance->scale.x, 0.0f), instance->rot);
+    v2 y_axis = v2_complex_prod(V2(0.0f, instance->scale.y), instance->rot);
+    
+    outline[0].offset = center - x_axis;
+    outline[0].scale = V2(thickness, instance->scale.y);
+    outline[0].rot = instance->rot;
+    outline[0].color = instance->color;
+    
+    outline[1].offset = center - y_axis;
+    outline[1].scale = V2(instance->scale.x, thickness);
+    outline[1].rot = instance->rot;
+    outline[1].color = instance->color;
+    
+    outline[2].offset = center + x_axis;
+    outline[2].scale = V2(thickness, instance->scale.y);
+    outline[2].rot = instance->rot;
+    outline[2].color = instance->color;
+    
+    outline[3].offset = center + y_axis;
+    outline[3].scale = V2(instance->scale.x, thickness);
+    outline[3].rot = instance->rot;
+    outline[3].color = instance->color;
+    
+    render_meshes(queue, GET_MESH_HANDLE(renderer, quad), outline, 4);
+}
+
 static void render_set_transform_game_camera(u16 handle, v2 p, v2 rot, f32 zoom) {
     f32 x_aspect_scale = (1.0f / (GAME_ASPECT_RATIO_X * 0.5f));
     f32 y_aspect_scale = (1.0f / (GAME_ASPECT_RATIO_Y * 0.5f));

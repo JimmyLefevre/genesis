@@ -40,9 +40,9 @@ static void init_synth(Synth* synth, Memory_Block* memory_block, u8 core_count, 
                 auto input_note = &input_notes[note_index];
                 auto synth_note = &synth_track.notes[note_index];
                 
-                synth_note->start_sample = f_round_to_s(CAST(f32, input_note->start) * ticks_to_samples);
+                synth_note->start_sample = f_round_s(CAST(f32, input_note->start) * ticks_to_samples);
                 // We add -1 because sequential notes overlap.
-                synth_note->end_sample = f_round_to_s(CAST(f32, input_note->start + input_note->duration) * ticks_to_samples) - 1;
+                synth_note->end_sample = f_round_s(CAST(f32, input_note->start + input_note->duration) * ticks_to_samples) - 1;
                 synth_note->wavelength = output_hz / midi_key_to_frequency(input_note->midi_key);
                 synth_note->velocity = CAST(f32, input_note->velocity);
             }
@@ -73,10 +73,10 @@ static void init_synth(Synth* synth, Memory_Block* memory_block, u8 core_count, 
             f32 decay_t = 0.030f;
             f32 release_t = 0.035f;
             
-            instrument.attack_samples = f_round_to_s(attack_t * synth->output_hz);
-            instrument.decay_samples = f_round_to_s(decay_t * synth->output_hz);
+            instrument.attack_samples = f_round_s(attack_t * synth->output_hz);
+            instrument.decay_samples = f_round_s(decay_t * synth->output_hz);
             instrument.sustain_factor = 0.5f;
-            instrument.release_samples = f_round_to_s(release_t * synth->output_hz);
+            instrument.release_samples = f_round_s(release_t * synth->output_hz);
             
             synth->instruments[instrument_index] = instrument;
             synth->tracks[synth->track_count++] = synth_track;

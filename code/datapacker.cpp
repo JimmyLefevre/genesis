@@ -152,7 +152,7 @@ static inline s32 midi_decodemod_and_advance(u8 **at) {
         }
     }
     
-    return CAST(s32, result);
+    return result;
 }
 
 static void *win_mem_alloc(usize size) {
@@ -724,7 +724,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                                                     
                                                     u32 ticks_per_second = (1000000 * ticks_per_quarter_note) / tempo;
                                                     f64 precision_check = (1000000.0 * CAST(f64, ticks_per_quarter_note)) / CAST(f64, tempo);
-                                                    u32 precision_check_quantized = CAST(s32, precision_check + 0.5);
+                                                    u32 precision_check_quantized = f_round_s(precision_check);
                                                     
                                                     ASSERT(precision_check_quantized == ticks_per_second);
                                                     

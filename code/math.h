@@ -47,6 +47,11 @@ struct v4 {
     };
 };
 
+struct v2f64 {
+    f64 x;
+    f64 y;
+};
+
 struct v2u {
     union {
         struct {
@@ -58,8 +63,14 @@ struct v2u {
 };
 
 struct v2s {
-    s32 x;
-    s32 y;
+    union {
+        struct {
+            s32 x;
+            s32 y;
+        };
+        s32 e[2];
+        u64 all;
+    };
 };
 
 struct v2s16 {
@@ -68,7 +79,18 @@ struct v2s16 {
             s16 x;
             s16 y;
         };
-        s16 E[2];
+        s16 e[2];
+    };
+};
+
+struct v2u16 {
+    union {
+        struct {
+            u16 x;
+            u16 y;
+        };
+        u16 e[2];
+        u32 all;
     };
 };
 
@@ -78,7 +100,7 @@ struct v2s8 {
             s8 x;
             s8 y;
         };
-        s8 E[2];
+        s8 e[2];
     };
 };
 
@@ -144,6 +166,12 @@ struct tri {
     };
 };
 
+struct cap2 {
+    v2 a;
+    v2 b;
+    f32 radius;
+};
+
 static inline v2 V2(const f32 x, const f32 y) {
     v2 result;
     result.x = x;
@@ -176,6 +204,13 @@ static inline v2 V2(const s32 v[2]) {
     v2 result;
     result.x = (f32)v[0];
     result.y = (f32)v[1];
+    return result;
+}
+
+static inline v2 V2(v2f64 v) {
+    v2 result;
+    result.x = CAST(f32, v.x);
+    result.y = CAST(f32, v.y);
     return result;
 }
 
@@ -225,6 +260,85 @@ static inline v2 operator*=(v2 &a, const f32 b) {
 }
 
 static inline v2 operator/=(v2 &a, const f32 b) {
+    a.x /= b;
+    a.y /= b;
+    return a;
+}
+
+static inline v2f64 V2F64(const f64 x, const f64 y) {
+    v2f64 result;
+    result.x = x;
+    result.y = y;
+    return result;
+}
+
+static inline v2f64 V2F64(const f64 v) {
+    v2f64 result;
+    result.x = v;
+    result.y = v;
+    return result;
+}
+
+static inline v2f64 V2F64() {
+    v2f64 result;
+    result.x = 0.0f;
+    result.y = 0.0f;
+    return result;
+}
+
+static inline v2f64 V2F64(v2 v) {
+    v2f64 result;
+    result.x = CAST(f64, v.x);
+    result.y = CAST(f64, v.y);
+    return result;
+}
+
+static inline v2f64 V2F64(v2s v) {
+    v2f64 result;
+    result.x = CAST(f64, v.x);
+    result.y = CAST(f64, v.y);
+    return result;
+}
+
+static inline v2f64 operator+(const v2f64 a, const v2f64 b) {
+    return V2F64(a.x + b.x, a.y + b.y);
+}
+
+static inline v2f64 operator-(const v2f64 a, const v2f64 b) {
+    return V2F64(a.x - b.x, a.y - b.y);
+}
+
+static inline v2f64 operator-(const v2f64 a) {
+    return V2F64(-a.x, -a.y);
+}
+
+static inline v2f64 operator*(const v2f64 a, const f64 b) {
+    return V2F64(a.x * b, a.y * b);
+}
+
+static inline v2f64 operator/(const v2f64 a, const f64 b) {
+    return V2F64(a.x / b, a.y / b);
+}
+
+static inline v2f64 operator+=(v2f64 &a, const v2f64 b) {
+    a.x += b.x;
+    a.y += b.y;
+    return a;
+}
+
+static inline v2f64 operator-=(v2f64 &a, const v2f64 b) {
+    a.x -= b.x;
+    a.y -= b.y;
+    return a;
+}
+
+static inline v2f64 operator*=(v2f64 &a, const f64 b) {
+    a.x *= b;
+    a.y *= b;
+    return a;
+}
+
+static inline v2f64 operator/=(v2f64 &a, const f64 b) {
     a.x /= b;
     a.y /= b;
     return a;
@@ -418,7 +532,10 @@ static inline v2u operator/=(v2u &a, const u32 b) {
     return a;
 }
 
-
+static inline v2s V2S(const s32 v) {
+    v2s result = {v, v};
+    return result;
+}
 static inline v2s V2S(const s32 x, const s32 y) {
     v2s result = {x, y};
     return result;
@@ -447,6 +564,9 @@ static inline v2s operator*(const v2s a, const s32 b) {
 static inline v2s operator/(const v2s a, const s32 b) {
     return V2S(a.x / b, a.y / b);
 }
+static inline v2s operator%(const v2s a, const s32 b) {
+    return V2S(a.x % b, a.y % b);
+}
 static inline v2s operator+=(v2s &a, const v2s b) {
     a.x += b.x;
     a.y += b.y;
@@ -471,6 +591,16 @@ static inline v2s operator/=(v2s &a, const v2s b) {
 static inline void v2s_add(v2s *a, v2s b) {
     a->x += b.x;
     a->y += b.y;
+}
+
+static inline s32 s_clamp(s32 v, s32 low_bound, s32 high_bound) {
+    if(v <= low_bound) {
+        return low_bound;
+    }
+    if(v >= high_bound) {
+        return high_bound;
+    }
+    return v;
 }
 
 static inline v2s16 V2S16(s16 x, s16 y) {
@@ -520,14 +650,24 @@ static inline v2s16 operator-(const v2s16 a, const v2s16 b) {
     return V2S16(a.x - b.x, a.y - b.y);
 }
 
-static inline s32 s_clamp(s32 v, s32 low_bound, s32 high_bound) {
-    if(v <= low_bound) {
-        return low_bound;
-    }
-    if(v >= high_bound) {
-        return high_bound;
-    }
-    return v;
+static inline v2u16 V2U16(s16 x, s16 y) {
+    v2u16 result;
+    result.x = x;
+    result.y = y;
+    return(result);
+}
+static inline v2u16 V2U16(s16 v) {
+    return(V2U16(v, v));
+}
+static inline v2u16 V2U16() {
+    return(V2U16(0, 0));
+}
+
+static inline v2u16 operator+(const v2u16 a, const v2u16 b) {
+    return V2U16(a.x + b.x, a.y + b.y);
+}
+static inline v2u16 operator-(const v2u16 a, const v2u16 b) {
+    return V2U16(a.x - b.x, a.y - b.y);
 }
 
 static inline bool rolling_tgt_u32(u32 a, u32 b) {
@@ -549,18 +689,6 @@ static inline f32 f_move_toward(f32 from, f32 to, f32 amount){
     }
     
     return(result);
-}
-
-static inline s32 f_ceil_s(f32 a) {
-    s32 truncate = (s32)a;
-    s32 result = (a > truncate) ? (truncate + 1) : truncate;
-    return result;
-}
-
-static inline u32 f_ceil_u(f32 a) {
-    u32 truncate = (u32)a;
-    u32 result = (a > truncate) ? (truncate + 1) : truncate;
-    return result;
 }
 
 static inline s32 s_abs(s32 s) {
@@ -628,7 +756,7 @@ DEFINE_SR(64);
 #undef DEFINE_SLL
 #undef DEFINE_SR
 
-static inline u32 f_test_lt(f32 a, f32 b) {
+static inline u32 f_lt(f32 a, f32 b) {
     f32 diff = a - b;
     s32 mask = *((s32 *)&diff) >> 31;
     return mask;
@@ -656,37 +784,60 @@ static inline s32 s_max(s32 a, s32 b) {
     return result;
 }
 
-static inline u32 f_round_to_u(f32 a) {
-    u32 result = (u32)(a + 0.5f);
+static inline s32 f_ceil_s(f32 a) {
+    s32 result = f_round_s(f_ceil_f(a));
+    return result;
+}
+static inline s32 f_floor_s(f32 a) {
+    s32 result = f_round_s(f_floor_f(a));
+    return result;
+}
+
+#if 0 // If we don't have SSE4.1
+static inline f32 f_round_f(f32 a) {
+    any32 magic;
+    magic.f = 8388608.0f;
+    u32 sign = BITCAST(u32, a) & (1 << 31);
+    magic.u |= sign;
+    f32 result = a + magic.f - magic.f;
     
-    return(result);
-}
-
-static inline s32 floor_s(f32 a) {
-    const s32 sa = (s32)a;
-    const f32 fa_minus_sa = a - (f32)sa;
-    const s32 nudge_mask = (*(s32 *)&fa_minus_sa) >> 31;
-    const s32 nudge = -1 & nudge_mask;
-    const s32 result = sa + nudge;
     return result;
 }
-
-static inline s32 ceil_s(f32 a) {
-    const s32 sa = (s32)a;
-    const f32 sa_minus_fa = (f32)sa - a;
-    const s32 sa_lt_fa = (*(s32 *)&sa_minus_fa) >> 31;
-    const s32 nudge = 1 & sa_lt_fa;
-    const s32 result = sa + nudge;
+static inline f64 f64_round_f(f64 a) {
+    union {
+        f64 f;
+        u64 u;
+    } magic;
+    magic.f = 4503599627370496.0;
+    magic.u |= BITCAST(u64, a) & (CAST(u64, 1) << 63);
+    f64 result = a + magic.f - magic.f;
+    
+    f64 sanity_check = CAST(f64, f64_round_s(a));
+    ASSERT(result == sanity_check);
     return result;
 }
+#endif
+
+static inline f32 f_fract(f32 a) {
+    f32 result = a - f_floor_f(a);
+    ASSERT((result >= 0.0f) && (result < 1.0f));
+    return a - f_floor_f(a);
+}
+
+static inline s32 f64_floor_s(f64 f) {
+    s32 result = f64_round_s(f64_floor_f64(f));
+    
+    return result;
+}
+static inline f64 f64_fract(f64 a) {
+    return a - f64_floor_f64(a);
+}
+
 
 // Taken from Charles Bloom's article:
 // https://cbloomrants.blogspot.com/2009/06/06-21-09-fast-exp-log.html
 static inline f32 f_exp(f32 a) {
-    union {
-        f32 f;
-        u32 u;
-    } exp;
+    any32 exp;
     // Move a to the exponent and convert exp2 to exp:
     const f32 expconst0 = (1 << 23) / 0.69314718f;
     // Negate floating-point bias and add our own bias:
@@ -696,10 +847,7 @@ static inline f32 f_exp(f32 a) {
     return exp.f;
 }
 static inline f32 f_log2(f32 a) {
-    union {
-        f32 f;
-        u32 u;
-    } fu;
+    any32 fu;
     fu.f = a;
     f32 vv = (f32)(fu.u - (127 << 23));
     vv *= (1.0f/8388608.0f);
@@ -747,9 +895,6 @@ static inline f32 f_min(f32 a, f32 b) {
     u32 uresult = (BITCAST(u32, a) & a_lt_b) | (BITCAST(u32, b) & ~a_lt_b);
     f32 result = BITCAST(f32, uresult);
     
-    f32 sanity_check = (a < b) ? a : b;
-    ASSERT(result == sanity_check);
-    
     return result;
 }
 
@@ -759,9 +904,6 @@ static inline f32 f_max(f32 a, f32 b) {
     u32 uresult = (BITCAST(u32, a) & ~a_lt_b) | (BITCAST(u32, b) & a_lt_b);
     f32 result = BITCAST(f32, uresult);
     
-    f32 sanity_check = (a < b) ? b : a;
-    ASSERT(result == sanity_check);
-    
     return result;
 }
 
@@ -770,7 +912,7 @@ static inline f32 f_mod(f32 a, f32 b) {
     return result;
 }
 
-static inline f32 inv_sqrt(f32 a) {
+static inline f32 f_inv_sqrt(f32 a) {
     f32 half = a * 0.5f;
     s32 ai = *(int *)&a;
     ai = 0x5f375a86 - (ai >> 1);
@@ -779,7 +921,7 @@ static inline f32 inv_sqrt(f32 a) {
     return a;
 }
 static inline f32 f_sqrt(f32 a) {
-    return (a * inv_sqrt(a));
+    return (a * f_inv_sqrt(a));
 }
 
 // @Speed: On Sandy Bridge, FSIN takes 47-100 cycles. FSINCOS takes 43-123.
@@ -846,18 +988,31 @@ static inline f32 f_clamp01(f32 to_clamp) {
     return(f_clamp(to_clamp, 0.0f, 1.0f));
 }
 
-static inline s32 f_round_to_s(f32 f) {
-    s32 result = (f >= 0.0f) ? (s32)(f + 0.5f) : (s32)(f - 0.5f);
-    return(result);
-}
-
-static inline f32 f_round(f32 f) {
-    f32 result = (f32)f_round_to_s(f);
+static inline f32 f_round_to_f(f32 f, f32 round) {
+    f32 result = f + round * 0.5f - f_mod(f, round);
     return result;
 }
 
-static inline f32 f_round_to_f(f32 f, f32 round) {
-    f32 result = f + round * 0.5f - f_mod(f, round);
+static inline f32 f_sample_bilinear(f32 sample00, f32 sample10, f32 sample01, f32 sample11, v2 uv) {
+    const f32 uv0 = (1.0f - uv.x) * (1.0f - uv.y);
+    const f32 uv1 = uv.x * (1.0f - uv.y);
+    const f32 uv2 = (1.0f - uv.x) * uv.y;
+    const f32 uv3 = uv.x * uv.y;
+    
+    const f32 result = sample00 * uv0 + sample10 * uv1 + sample01 * uv2 + sample11 * uv3;
+    
+    return result;
+}
+
+static inline f32 f_cubic_bezier(f32 a, f32 b, f32 c, f32 d, f32 t) {
+    f32 one_minus_t = 1.0f - t;
+    f32 one_minus_t_squared = one_minus_t * one_minus_t;
+    f32 one_minus_t_cubed = one_minus_t_squared * one_minus_t;
+    f32 t_squared = t * t;
+    f32 t_cubed = t_squared * t;
+    
+    f32 result = a * one_minus_t_cubed + b * 3.0f * t * one_minus_t_squared + c * 3.0f * t_squared * one_minus_t + d * t_cubed;
+    
     return result;
 }
 
@@ -866,9 +1021,21 @@ static inline f32 f_round_to_f(f32 f, f32 round) {
 //  \/\/   Recursive interpolation of these three points, with
 //   \/    "\" being 1-t and "/" being t.
 // result
-static inline v2 quadratic_bezier(v2 a, v2 b, v2 c, f32 t) {
+static inline v2 v2_quadratic_bezier(v2 a, v2 b, v2 c, f32 t) {
     f32 one_minus_t = 1.0f - t;
     v2 result = a * one_minus_t * one_minus_t + b * 2.0f * t * one_minus_t + c * t * t;
+    return result;
+}
+
+static inline v2 v2_cubic_bezier(v2 a, v2 b, v2 c, v2 d, f32 t) {
+    f32 one_minus_t = 1.0f - t;
+    f32 one_minus_t_squared = one_minus_t * one_minus_t;
+    f32 one_minus_t_cubed = one_minus_t_squared * one_minus_t;
+    f32 t_squared = t * t;
+    f32 t_cubed = t_squared * t;
+    
+    v2 result = a * one_minus_t_cubed + b * 3.0f * t * one_minus_t_squared + c * 3.0f * t_squared * one_minus_t + d * t_cubed;
+    
     return result;
 }
 
@@ -889,11 +1056,6 @@ static inline v2 V2(v2s16 int_v) {
     result.x = (f32)int_v.x;
     result.y = (f32)int_v.y;
     return(result);
-}
-
-static inline bool isnull(v2 a) {
-    
-    return((a.x == 0) && (a.y == 0));
 }
 
 static inline bool v2_equal(v2 a, v2 b) {
@@ -965,6 +1127,17 @@ static inline f32 v2_length(v2 a){
     return(result);
 }
 
+static inline f32 v2_length_or_zero(v2 a){
+    f32 result = 0.0f;
+    f32 length_sq = v2_length_sq(a);
+    
+    if(length_sq) {
+        result = f_sqrt(length_sq);
+    }
+    
+    return(result);
+}
+
 static inline bool v2_longer_than(v2 v, f32 length) {
     return v2_length_sq(v) > (length * length);
 }
@@ -1000,18 +1173,42 @@ static inline bool v2_in_circle(v2 v, v2 circle_p, f32 radius, f32 enlarge = 0.0
     return(result);
 }
 
-static inline v2 v2_normalize(v2 a){
-    
-    v2 result = {};
-    f32 alen = v2_length(a);
-    if(alen) {
-        
-        f32 normalize_factor = 1.0f/alen;
-        
-        result.x = a.x * normalize_factor;
-        result.y = a.y * normalize_factor;
-    }
+static inline bool v2_in_rect2(v2 p, rect2 rect) {
+    bool result = (p.x > rect.left && p.x < rect.right) &&
+        (p.y > rect.bottom && p.y < rect.top);
     return(result);
+}
+
+static inline v2 v2_normalize(v2 a) {
+    f32 alensq = v2_length_sq(a);
+    f32 normalize_factor = f_inv_sqrt(alensq);
+    
+    v2 result;
+    result.x = a.x * normalize_factor;
+    result.y = a.y * normalize_factor;
+    
+    return(result);
+}
+
+static inline void v2_normalize_if_nonzero(v2 a, v2 *out) {
+    f32 length_sq = v2_length_sq(a);
+    
+    if(length_sq) {
+        *out = a * f_inv_sqrt(length_sq);
+    }
+}
+
+static inline v2 v2_lerp_n(v2 from, v2 to, f32 at) {
+    return v2_normalize(v2_lerp(from, to, at));
+}
+
+static inline v2 v2_fract(v2 a) {
+    v2 result;
+    
+    result.x = f_fract(a.x);
+    result.y = f_fract(a.y);
+    
+    return result;
 }
 
 static inline v2 v2_angle_to_complex(f32 rads) {
@@ -1038,6 +1235,12 @@ static inline v2 v2_complex_prod_n(v2 a, v2 b) {
     return v2_normalize(v2_complex_prod(a, b));
 }
 
+static inline v2 v2_rotate_around(v2 p, v2 center, v2 rotation) {
+    v2 rel = p - center;
+    v2 result = v2_complex_prod(rel, rotation);
+    return (p + result);
+}
+
 static inline s32 v2_rect2_first_hit(v2 p, rect2 *rects, ssize rect_count) {
     FORI_TYPED(s32, 0, rect_count) {
         rect2 rect = rects[i];
@@ -1049,12 +1252,6 @@ static inline s32 v2_rect2_first_hit(v2 p, rect2 *rects, ssize rect_count) {
     return -1;
 }
 
-static inline bool point_in_rect2(v2 p, rect2 rect) {
-    bool result = (p.x > rect.left && p.x < rect.right) &&
-        (p.y > rect.bottom && p.y < rect.top);
-    return(result);
-}
-
 static inline void line_line_intersection(const v2 a0, const v2 b0, const v2 a1, const v2 b1, f32 *out_t, f32 *out_s) {
     const v2 d0 = b0 - a0;
     const v2 d1 = b1 - a1;
@@ -1064,6 +1261,18 @@ static inline void line_line_intersection(const v2 a0, const v2 b0, const v2 a1,
     const f32 t = v2_cross_prod(d1, da) * inv_cross;
     *out_s = s;
     *out_t = t;
+}
+
+inline v2 line_closest(const v2 a, const v2 b, const v2 pt) {
+    v2 ab = b - a;
+    v2 apt = pt - a;
+    
+    f32 abinner = v2_inner(ab, ab);
+    f32 aptinner = v2_inner(ab, apt);
+    f32 t = f_clamp01(aptinner / abinner);
+    v2 result = a + ab * t;
+    
+    return result;
 }
 
 static inline bool line_line_overlap(v2 a0, v2 b0, v2 a1, v2 b1) {
@@ -1164,6 +1373,28 @@ static inline rect2 rect2_clip(rect2 a, rect2 b) {
     return result;
 }
 
+static inline cap2 cap2_5f(f32 ax, f32 ay, f32 bx, f32 by, f32 radius) {
+    cap2 result;
+    
+    result.a.x = ax;
+    result.a.y = ay;
+    result.b.x = bx;
+    result.b.y = by;
+    result.radius = radius;
+    
+    return result;
+}
+
+static inline cap2 cap2_abrad(v2 a, v2 b, f32 radius) {
+    cap2 result;
+    
+    result.a = a;
+    result.b = b;
+    result.radius = radius;
+    
+    return result;
+}
+
 static inline v2 v2_fit_to_h(v2 v, f32 h) {
     
     ASSERT(v.y);
@@ -1222,6 +1453,17 @@ static inline f32 v4_length_sq(v4 a){
     return result;
 }
 
+static inline rect2s rect2s_conservative_aabb(rect2 r) {
+    rect2s result;
+    
+    result.left = f_floor_s(r.left);
+    result.bottom = f_floor_s(r.bottom);
+    result.right = f_ceil_s(r.right);
+    result.top = f_ceil_s(r.top);
+    
+    return result;
+}
+
 static inline bool rects_differ(rect2s a, rect2s b) {
     return ((a.left != b.left) || (a.bottom != b.bottom) ||
             (a.right != b.right) || (a.top != b.top));
@@ -1245,7 +1487,7 @@ static rect2s rect2s_fit(s32 to_fit_w, s32 to_fit_h, s32 bounds_w, s32 bounds_h)
     if(fit_w > (f32)bounds_w) {
         // We are width-bound.
         
-        s32 one_black_bar_height = f_round_to_s(((f32)bounds_h - fit_h) * 0.5f);
+        s32 one_black_bar_height = f_round_s(((f32)bounds_h - fit_h) * 0.5f);
         
         result.left = 0;
         result.right = bounds_w;
@@ -1254,7 +1496,7 @@ static rect2s rect2s_fit(s32 to_fit_w, s32 to_fit_h, s32 bounds_w, s32 bounds_h)
     } else {
         // We are height-bound.
         
-        s32 one_black_bar_width = f_round_to_s(((f32)bounds_w - fit_w) * 0.5f);
+        s32 one_black_bar_width = f_round_s(((f32)bounds_w - fit_w) * 0.5f);
         
         result.left = one_black_bar_width;
         result.right = bounds_w - one_black_bar_width;
