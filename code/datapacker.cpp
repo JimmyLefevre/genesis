@@ -26,6 +26,7 @@
 
 struct Render_Vertex {
     v2 p;
+    v2 uv;
     v4 color;
 };
 

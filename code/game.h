@@ -9,9 +9,10 @@
 #define TREE_RADIUS               0.25f
 #define TURRET_RADIUS             0.10f
 #define BULLET_RADIUS             0.05f
+#define ITEM_RADIUS               0.30f
+
 #define PLAYER_HITCAP_RADIUS      0.15f
 #define PLAYER_HITCAP_RANGE       1.00f
-#define ITEM_PICKUP_RADIUS        0.30f
 
 #define PLAYER_HITCAP_A_OFFSET (PLAYER_HITCAP_RADIUS + PLAYER_RADIUS + PROJECTILE_SPAWN_DIST_EPSILON)
 #define PLAYER_HITCAP_B_OFFSET (PLAYER_HITCAP_RANGE - PLAYER_HITCAP_RADIUS)
@@ -67,12 +68,13 @@ ENUM(Weapon_Type) {
     COUNT,
 };
 
-struct Movement_Batch {
+struct Collision_Batch {
     v2 *ps;
     v2 *dps;
+    u16 *collision_handles;
     
     f32 radius;
-    s32 count;
+    s32 *count;
     
     u8 type;
 };
@@ -81,6 +83,14 @@ struct Entity_Reference {
     u8 type;
     s32 index;
 };
+static inline Entity_Reference make_entity_reference(u8 type, s32 index) {
+    Entity_Reference result = {};
+    
+    result.type = type;
+    result.index = index;
+    
+    return result;
+}
 
 struct Weapon {
     u8 type;
@@ -140,22 +150,6 @@ static inline Item_Contents make_weapon_item(u8 type, u8 weapon_type) {
     
     return result;
 }
-
-// @Incomplete: This.
-
-struct Collision_Tree_Leaf {
-    f32 disk_xs[4];
-    f32 disk_ys[4];
-    f32 disk_radii[4];
-    
-    u16 collider_indices[4];
-    u8 collider_types[4];
-};
-
-struct Dynamic_Aabb_Tree_Node {
-    rect2 left_bounds;
-    rect2 right_bounds;
-};
 
 struct Precise_Position {
     v2s tile;
@@ -229,6 +223,29 @@ static inline Game_Tile *get_stored_tile(Game_Map_Storage *storage, v2s tile_p) 
     return result;
 }
 
+struct Collision_Plane {
+    f32 x;
+    u16 handle;
+    bool left; // We have 15 bits available for flags.
+};
+
+#define MAX_COLLISION_VOLUME_COUNT 256
+struct Game_Collision {
+    s32 removal_count;
+    u16 removals[MAX_COLLISION_VOLUME_COUNT];
+    
+    s32 plane_count;
+    Collision_Plane planes[MAX_COLLISION_VOLUME_COUNT * 2];
+    
+    Entity_Reference references[MAX_COLLISION_VOLUME_COUNT];
+    u32 handle_minus_one_to_indices[MAX_COLLISION_VOLUME_COUNT];
+    
+    s32 overlap_pair_count;
+    u16 overlap_pairs[MAX_COLLISION_VOLUME_COUNT * 4][2];
+    
+    Entity_Reference results[MAX_COLLISION_VOLUME_COUNT * 4][2];
+};
+
 struct Game {
     // Metagame:
     u32 current_level_index; // ;Serialised
@@ -241,6 +258,7 @@ struct Game {
     v2s working_set_tile_p;
     
     s32 current_player;
+    
     struct {
         s32   count;                                    // ;Serialised
         
@@ -256,13 +274,18 @@ struct Game {
         cap2 weapon_hitcaps    [     MAX_PLAYER_COUNT];
         
         s32 item_selections    [     MAX_PLAYER_COUNT]; // ;Immediate
-    } players;
+        
+        u16 collision_handles  [     MAX_PLAYER_COUNT];
+        u16 weapon_collision_handles[MAX_PLAYER_COUNT];
+    } PLAYER;
     
     struct {
         s32 count;                                      // ;Serialised
         v2  ps                 [MAX_LIVE_ENTITY_COUNT]; // ;Serialised
         f32 cooldowns          [MAX_LIVE_ENTITY_COUNT]; // ;Serialised
-    } turrets;
+        
+        u16 collision_handles  [MAX_LIVE_ENTITY_COUNT];
+    } TURRET;
     
     struct {
         s32  count;
@@ -272,20 +295,28 @@ struct Game {
         bool hit_level_geometry[MAX_LIVE_ENTITY_COUNT];
         
         v2   dps               [MAX_LIVE_ENTITY_COUNT]; // ;Immediate
-    } bullets;
+        
+        u16 collision_handles  [MAX_LIVE_ENTITY_COUNT];
+    } BULLET;
     
     struct {
         s32 count;
         v2  ps                 [MAX_LIVE_ENTITY_COUNT];
-    } trees;
+        
+        u16 collision_handles  [MAX_LIVE_ENTITY_COUNT];
+    } TREE;
     
     struct {
         s32 count;
         v2 ps                  [MAX_LIVE_ENTITY_COUNT];
         Item_Contents contents [MAX_LIVE_ENTITY_COUNT];
-    } items;
+        
+        u16 collision_handles  [MAX_LIVE_ENTITY_COUNT];
+    } ITEM;
     
     bool lost;
+    
+    Game_Collision collision;
     
     s32 entity_removal_count; // ;Immediate
     Entity_Reference entity_removals[MAX_LIVE_ENTITY_COUNT];

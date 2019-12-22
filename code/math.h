@@ -776,8 +776,6 @@ static inline u32 boolean_mask(u32 b) {
     return result;
 }
 
-// @Untested: There should probably be a u_max too.
-// How does this handle negative a for signed and unsigned?
 static inline s32 s_max(s32 a, s32 b) {
     s32 a_lt_b = (a - b) >> 31;
     s32 result = (a & ~a_lt_b) | (b & a_lt_b);
@@ -1151,6 +1149,15 @@ static inline v2 v2_clamp(v2 a, f32 low, f32 high) {
     return result;
 }
 
+static inline v2 v2_clamp_element_wise(v2 a, v2 low, v2 high) {
+    v2 result;
+    
+    result.x = f_clamp(a.x, low.x, high.x);
+    result.y = f_clamp(a.y, low.y, high.y);
+    
+    return result;
+}
+
 static inline v2 v2_lerp(v2 from, v2 to, f32 at){
     v2 result;
     result.x = ((1.0f - at) * from.x) + (at * to.x);
@@ -1252,6 +1259,14 @@ static inline s32 v2_rect2_first_hit(v2 p, rect2 *rects, ssize rect_count) {
     return -1;
 }
 
+static inline f32 v2_rect2_dist_sq(v2 p, rect2 aabb) {
+    v2 closest = v2_clamp_element_wise(p, aabb.min, aabb.max);
+    
+    f32 dist_sq = v2_length_sq(closest - p);
+    
+    return dist_sq;
+}
+
 static inline void line_line_intersection(const v2 a0, const v2 b0, const v2 a1, const v2 b1, f32 *out_t, f32 *out_s) {
     const v2 d0 = b0 - a0;
     const v2 d1 = b1 - a1;
@@ -1351,18 +1366,63 @@ static inline rect2 rect2_phalfdim(v2 p, v2 halfdim){
     return(result);
 }
 
+static inline rect2 rect2_phalfdim(v2 p, f32 halfdim){
+    rect2 result;
+    
+    result.left   = p.x - halfdim;
+    result.right  = p.x + halfdim;
+    result.top    = p.y + halfdim;
+    result.bottom = p.y - halfdim;
+    
+    return(result);
+}
+
 static inline rect2 rect2_grow_dim(rect2 a, v2 dim){
     rect2 result = a;
     
-    f32 halfw = dim.x/2;
-    f32 halfh = dim.y/2;
+    f32 halfw = dim.x * 0.5f;
+    f32 halfh = dim.y * 0.5f;
     
-    result.left -= halfw;
-    result.right += halfw;
-    result.top += halfh;
+    result.left   -= halfw;
+    result.right  += halfw;
+    result.top    += halfh;
     result.bottom -= halfh;
     
     return(result);
+}
+
+static inline bool rect2_equal(rect2 a, rect2 b) {
+    bool result = (a.left == b.left) && (a.right == b.right) && (a.bottom == b.bottom) && (a.top == b.top);
+    
+    return result;
+}
+
+static inline rect2 rect2_encompass(rect2 a, rect2 b) {
+    rect2 result;
+    
+    result.left = f_min(a.left, b.left);
+    result.bottom = f_min(a.bottom, b.bottom);
+    result.right = f_max(a.right, b.right);
+    result.top = f_max(a.top, b.top);
+    
+    return result;
+}
+
+static inline bool rect2_encompasses(rect2 a, rect2 b) {
+    bool result = (a.left < b.left) && (a.bottom < b.bottom) && (a.right > b.right) && (a.top > b.top);
+    
+    return result;
+}
+
+static inline f32 rect2_area(rect2 a) {
+    f32 result = (a.right - a.left) * (a.top - a.bottom);
+    
+    return result;
+}
+
+static inline bool rect2_rect2_overlap(rect2 a, rect2 b) {
+    bool result = !((a.left > b.right) || (a.right < b.left) || (a.bottom > b.top) || (a.top < b.bottom));
+    return result;
 }
 
 static inline rect2 rect2_clip(rect2 a, rect2 b) {

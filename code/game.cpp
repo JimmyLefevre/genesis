@@ -18,6 +18,7 @@ extern "C" {
 #include               "math.h"
 #include          "utilities.h"
 #include             "string.h"
+#include           "bitfield.h"
 #include                "log.h"
 #include            "profile.h"
 #include                "bmp.h"
@@ -39,6 +40,7 @@ static Log *global_log;
 #include        "bitpacker.cpp"
 #include            "print.cpp"
 #include           "string.cpp"
+#include         "bitfield.cpp"
 #include              "log.cpp"
 #include              "bmp.cpp"
 #include            "input.cpp"
@@ -365,6 +367,151 @@ static inline bool disk_capsule_overlap(const v2 p, const f32 disk_radius, const
 }
 
 //
+// Collision
+//
+
+static inline u32 get_collision_indices(Game_Collision *collision, u16 handle) {
+    ASSERT(handle);
+    u32 result = collision->handle_minus_one_to_indices[handle - 1];
+    
+    ASSERT(result);
+    
+    return result;
+}
+
+static u16 add_collision(Game_Collision *collision) {
+    FORI(0, MAX_COLLISION_VOLUME_COUNT) {
+        u32 indices = collision->handle_minus_one_to_indices[i];
+        
+        if(!indices) {
+            u16 handle = CAST(u16, i + 1);
+            
+            ASSERT(collision->plane_count < MAX_COLLISION_VOLUME_COUNT);
+            indices = collision->plane_count++;
+            indices |= (collision->plane_count++ & 0xFFFF) << 16;
+            
+            collision->handle_minus_one_to_indices[i] = indices;
+            
+            return handle;
+        }
+    }
+    return 0;
+}
+
+static void update_collision(Game_Collision *collision, u16 handle, Entity_Reference reference, v2 p, f32 radius) {
+    u32 indices = get_collision_indices(collision, handle);
+    Collision_Plane *left = &collision->planes[indices & 0xFFFF];
+    Collision_Plane *right = &collision->planes[indices >> 16];
+    
+    left->x = p.x - radius;
+    left->handle = handle;
+    left->left = true;
+    right->x = p.x + radius;
+    right->handle = handle;
+    right->left = false;
+    
+    collision->references[handle] = reference;
+}
+
+static inline void remove_collision(Game_Collision *collision, u16 handle) {
+    ASSERT(collision->removal_count < MAX_COLLISION_VOLUME_COUNT);
+    collision->removals[collision->removal_count++] = handle;
+}
+
+static void overlap_update(Game_Collision *collision) {
+    { // Removals.
+        u16 to_remove[512];
+        s32 to_remove_count = 0;
+        
+        // @Speed? We're sorting the indices to remove in decreasing order so that
+        // unordered remove still works.
+        FORI(0, collision->removal_count) {
+            u16 handle = collision->removals[i];
+            
+            u32 indices = get_collision_indices(collision, handle);
+            
+            to_remove[to_remove_count++] = indices & 0xFFFF;
+            to_remove[to_remove_count++] = indices >> 16;
+            
+            collision->handle_minus_one_to_indices[handle - 1] = 0;
+        }
+        
+        FORI_NAMED(_, 0, to_remove_count) {
+            FORI_NAMED(i, 0, to_remove_count - 1) {
+                if(to_remove[i] < to_remove[i+1]) {
+                    SWAP(to_remove[i], to_remove[i+1]);
+                }
+            }
+        }
+        
+        FORI(0, to_remove_count) {
+            collision->planes[to_remove[i]] = collision->planes[--collision->plane_count];
+        }
+        
+        collision->removal_count = 0;
+    }
+    
+    { // Sort the planes. @Speed: Bubble sort.
+        // @Speed: A merge sort would be good not only complexity-wise, but also because we could
+        // put entities into tiles in a sorted order so we can just do a single merge when adding
+        // new tiles to the working set.
+        FORI_NAMED(_, 0, collision->plane_count) {
+            FORI_NAMED(i, 0, collision->plane_count - 1) {
+                if(collision->planes[i].x > collision->planes[i+1].x) {
+                    SWAP(collision->planes[i], collision->planes[i+1]);
+                }
+            }
+        }
+    }
+    
+    { // Overlap check.
+        s32 overlap_pair_count = 0;
+        
+        u16 open_spans[MAX_COLLISION_VOLUME_COUNT];
+        s32 open_span_count = 0;
+        
+        FORI(0, collision->plane_count) {
+            Collision_Plane *plane = &collision->planes[i];
+            u32 indices = get_collision_indices(collision, plane->handle);
+            
+            if(plane->left) {
+                FORI_NAMED(span_index, 0, open_span_count) {
+                    ASSERT(overlap_pair_count < MAX_COLLISION_VOLUME_COUNT * 4);
+                    collision->overlap_pairs[overlap_pair_count  ][0] = open_spans[span_index];
+                    collision->overlap_pairs[overlap_pair_count++][1] = plane->handle;
+                }
+                
+                open_spans[open_span_count++] = plane->handle;
+                
+                indices &= ~0xFFFF;
+                indices |= i & 0xFFFF;
+            } else {
+                FORI_NAMED(span_index, 0, open_span_count) {
+                    if(open_spans[span_index] == plane->handle) {
+                        open_spans[span_index] = open_spans[--open_span_count];
+                        break;
+                    }
+                }
+                
+                indices &= 0xFFFF;
+                indices |= i << 16;
+            }
+            
+            collision->handle_minus_one_to_indices[plane->handle-1] = indices;
+        }
+        
+        collision->overlap_pair_count = overlap_pair_count;
+    }
+    
+    { // Translating handles to references.
+        FORI(0, collision->overlap_pair_count) {
+            collision->results[i][0] = collision->references[collision->overlap_pairs[i][0]];
+            collision->results[i][1] = collision->references[collision->overlap_pairs[i][1]];
+        }
+    }
+}
+
+//
 //
 //
 
@@ -394,33 +541,23 @@ static void update_ballistic_dp(f32 *_dp, Input in, u32 minus_button, u32 plus_b
     *_dp = dp;
 }
 
-static void mark_entity_for_removal(Game *g, u8 type, s32 index) {
+static void mark_entity_for_removal(Game *g, Entity_Reference reference) {
     // Checking that we don't mark the same entity multiple times. @Speed?
     FORI(0, g->entity_removal_count) {
         Entity_Reference *removal = &g->entity_removals[i];
-        if((removal->type == type) && (removal->index == index)) {
+        if((removal->type == reference.type) && (removal->index == reference.index)) {
             return;
         }
     }
     
     Entity_Reference *removal = &g->entity_removals[g->entity_removal_count++];
     ASSERT(g->entity_removal_count < MAX_LIVE_ENTITY_COUNT);
-    
-    removal->type = type;
-    removal->index = index;
+    *removal = reference;
 }
 
-static s32 add_bullet(Game *g, v2 p, v2 direction, f32 speed) {
-    const s32 insert = g->bullets.count;
-    ASSERT(insert < MAX_LIVE_ENTITY_COUNT);
-    
-    g->bullets.ps                [insert] = p;
-    g->bullets.directions        [insert] = direction;
-    g->bullets.speeds            [insert] = speed;
-    g->bullets.hit_level_geometry[insert] = false;
-    
-    g->bullets.count += 1;
-    return insert;
+static inline void mark_entity_for_removal(Game *g, u8 type, s32 index) {
+    Entity_Reference reference = make_entity_reference(type, index);
+    mark_entity_for_removal(g, reference);
 }
 
 struct V2_Closest_Result {
@@ -582,6 +719,10 @@ static void load_dumb_level(Game *g) {
     g->camera_zoom = 1.0f;
     g->map_dim = V2(TEST_MAP_WIDTH, TEST_MAP_HEIGHT);
     
+    {
+        Game_Collision *collision = &g->collision;
+    }
+    
     { // Spawning the player and positioning the working set.
         v2f64 player_global_p = V2F64(0.5f, -0.5f);
         
@@ -589,10 +730,11 @@ static void load_dumb_level(Game *g) {
         
         g->working_set_tile_p = precise.tile;
         
-        g->players.count = 1;
-        g->players.ps[0] = precise_to_working_set(precise, g->working_set_tile_p);
-        g->players.rots[0] = V2(1.0f, 0.0f);
-        g->players.weapons[0].type = Weapon_Type::SLASH;
+        g->PLAYER.count = 1;
+        g->PLAYER.ps[0] = precise_to_working_set(precise, g->working_set_tile_p);
+        g->PLAYER.rots[0] = V2(1.0f, 0.0f);
+        g->PLAYER.weapons[0].type = Weapon_Type::SLASH;
+        g->PLAYER.collision_handles[0] = add_collision(&g->collision);
     }
     
     { // Initializing the static geometry SDF.
@@ -633,7 +775,7 @@ static void load_dumb_level(Game *g) {
             ASSERT((precise.tile.x + max_tile_x) < storage->dim.x);
             ASSERT((precise.tile.y + max_tile_y) < storage->dim.y);
             
-            g->trees.ps[tree_index] = precise_to_working_set(precise, g->working_set_tile_p);
+            g->TREE.ps[tree_index] = precise_to_working_set(precise, g->working_set_tile_p);
             
             FORI_TYPED_NAMED(s32, rel_tile_y, min_tile_y, max_tile_y + 1) {
                 FORI_TYPED_NAMED(s32, rel_tile_x, min_tile_x, max_tile_x + 1) {
@@ -690,30 +832,6 @@ static void load_dumb_level(Game *g) {
         }
     }
     
-#if 0
-    g->trees.count = 3;
-    g->trees.ps[0] = V2(-1.0f);
-    g->trees.ps[1] = V2(-1.3f,  1.0f);
-    g->trees.ps[2] = V2( 3.0f, -0.5f);
-    
-    g->items.count = 1;
-    g->items.ps[0] = V2(0.0f, 1.0f);
-    g->items.contents[0].type = Item_Type::WEAPON;
-    g->items.contents[0].weapon.type = Weapon_Type::THRUST;
-    
-    g->bullets.count = 2;
-    g->bullets.ps[0] = V2(-1.5f, 4.0f);
-    g->bullets.directions[0] = V2(0.0f, 1.0f);
-    g->bullets.speeds[0] = 0.5f;
-    g->bullets.ps[1] = V2(-25.0f);
-    g->bullets.directions[1] = V2(0.0f, 1.0f);
-    g->bullets.speeds[1] = 0.5f;
-    
-    g->turrets.count = 1;
-    g->turrets.ps       [0] = V2(0.0f, 2.0f);
-    g->turrets.cooldowns[0] = 1.0f;
-#else
-    
     {
         v2f64 tree_global_ps[] = {
             V2F64(-1.0),
@@ -744,7 +862,6 @@ static void load_dumb_level(Game *g) {
             place_turret(storage, turret_global_ps[i] + V2F64(g->map_dim) * 0.5);
         }
     }
-#endif
     
     // Loading the tiles into the working set.
     FORI_TYPED_NAMED(s32, sdf_y, 0, WORKING_SET_GRID_HEIGHT) {
@@ -760,27 +877,62 @@ static void load_dumb_level(Game *g) {
     }
 }
 
-#define GET_INSERT_INDEX(soa) g->##soa##.count++; ASSERT(g->##soa##.count < MAX_LIVE_ENTITY_COUNT)
-static void add_turret(Game *g, v2 p) {
-    s32 add = GET_INSERT_INDEX(turrets);
+#define ADD_ENTITY_BEGIN(type) s32 add = g->##type##.count++; \
+ASSERT(g->##type##.count < MAX_LIVE_ENTITY_COUNT); \
+Entity_Reference reference = make_entity_reference(Entity_Type::##type, add);
+
+static Entity_Reference add_bullet(Game *g, v2 p, v2 direction, f32 speed) {
+    ADD_ENTITY_BEGIN(BULLET);
+    rect2 aabb = rect2_phalfdim(p, BULLET_RADIUS);
     
-    g->turrets.ps[add] = p;
-    g->turrets.cooldowns[add] = 1.0f;
+    g->BULLET.ps                [add] = p;
+    g->BULLET.directions        [add] = direction;
+    g->BULLET.speeds            [add] = speed;
+    g->BULLET.hit_level_geometry[add] = false;
+    g->BULLET.collision_handles [add] = add_collision(&g->collision);
+    
+    return reference;
 }
 
-static void add_tree(Game *g, v2 p) {
-    s32 add = GET_INSERT_INDEX(trees);
+static Entity_Reference add_turret(Game *g, v2 p) {
+    ADD_ENTITY_BEGIN(TURRET);
+    rect2 aabb = rect2_phalfdim(p, TURRET_RADIUS);
     
-    g->trees.ps[add] = p;
+    g->TURRET.ps[add] = p;
+    g->TURRET.cooldowns[add] = 1.0f;
+    g->TURRET.collision_handles[add] = add_collision(&g->collision);
+    
+    return reference;
 }
 
-static void add_item(Game *g, v2 p, Item_Contents contents) {
-    s32 add = GET_INSERT_INDEX(items);
+static Entity_Reference add_tree(Game *g, v2 p) {
+    ADD_ENTITY_BEGIN(TREE);
+    rect2 aabb = rect2_phalfdim(p, TREE_RADIUS);
     
-    g->items.ps[add] = p;
-    g->items.contents[add] = contents;
+    g->TREE.ps[add] = p;
+    g->TREE.collision_handles[add] = add_collision(&g->collision);
+    
+    return reference;
+}
+
+static Entity_Reference add_item(Game *g, v2 p, Item_Contents contents) {
+    ADD_ENTITY_BEGIN(ITEM);
+    rect2 aabb = rect2_phalfdim(p, ITEM_RADIUS);
+    
+    g->ITEM.ps[add] = p;
+    g->ITEM.contents[add] = contents;
+    g->ITEM.collision_handles[add] = add_collision(&g->collision);
+    
+    return reference;
 }
 #undef GET_INSERT_INDEX
+
+// @Flags
+static inline bool is_persistent_type(u8 type) {
+    using namespace Entity_Type;
+    bool result = (type == TURRET) || (type == TREE) || (type == ITEM);
+    return result;
+}
 
 void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_Info *audio, Datapack_Handle *datapack) {
     TIME_BLOCK;
@@ -806,7 +958,7 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
     // last frame and current frame data.
     //
     
-    if(g->players.count) { // Player controls.
+    if(g->PLAYER.count) { // Player controls.
         {
             f32 camera_zoom = g->camera_zoom;
             if(BUTTON_DOWN(in, slot1)) {
@@ -822,29 +974,29 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
             g->camera_zoom = camera_zoom;
             g->xhair_offset = unit_scale_to_world_space_offset(in.xhairp, camera_zoom);
             
-            v2_normalize_if_nonzero(g->xhair_offset, &g->players.rots[0]);
+            v2_normalize_if_nonzero(g->xhair_offset, &g->PLAYER.rots[0]);
         }
         
         const v2 xhair_offset = g->xhair_offset;
-        const s32 count = g->players.count;
+        const s32 count = g->PLAYER.count;
         for(s32 iplayer = 0; iplayer < count; ++iplayer) {
-            v2 p = g->players.ps[iplayer];
-            v2 rot = g->players.rots[iplayer];
+            v2 p = g->PLAYER.ps[iplayer];
+            v2 rot = g->PLAYER.rots[iplayer];
             
             { // Movement.
-                v2 dp = g->players.dps[iplayer];
+                v2 dp = g->PLAYER.dps[iplayer];
                 
                 update_ballistic_dp(&dp.x, in, BUTTON_FLAG(left), BUTTON_FLAG(right), dt32,
                                     80.0f, 0.5f, 10.0f);
                 update_ballistic_dp(&dp.y, in, BUTTON_FLAG(down), BUTTON_FLAG(up)   , dt32,
                                     80.0f, 0.5f, 10.0f);
                 
-                g->players.dps[iplayer] = dp;
+                g->PLAYER.dps[iplayer] = dp;
             }
             
             { // Action.
-                Player_Animation_State *anim_state = &g->players.animation_states[iplayer];
-                Weapon *weapon = &g->players.weapons[iplayer];
+                Player_Animation_State *anim_state = &g->PLAYER.animation_states[iplayer];
+                Weapon *weapon = &g->PLAYER.weapons[iplayer];
                 
                 anim_state->time_since_last_attack += dt32;
                 
@@ -854,8 +1006,8 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
                         
                         if(weapon->type == Weapon_Type::SLASH) {
                             // Shortsword
-                            f32 old_rot0_y = g->players.weapons[iplayer].melee.slash.rot0.y;
-                            f32 old_rot1_y = g->players.weapons[iplayer].melee.slash.rot1.y;
+                            f32 old_rot0_y = g->PLAYER.weapons[iplayer].melee.slash.rot0.y;
+                            f32 old_rot1_y = g->PLAYER.weapons[iplayer].melee.slash.rot1.y;
                             
                             v2 rot0 = v2_angle_to_complex(-PI * 0.25f);
                             v2 rot1 = v2_angle_to_complex( PI * 0.25f);
@@ -892,10 +1044,10 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
             }
             
             { // Hitcap update.
-                auto *anim_state = &g->players.animation_states[iplayer];
+                auto *anim_state = &g->PLAYER.animation_states[iplayer];
                 
                 if(anim_state->animating) {
-                    Weapon *weapon = &g->players.weapons[iplayer];
+                    Weapon *weapon = &g->PLAYER.weapons[iplayer];
                     
                     anim_state->t += anim_state->dt;
                     
@@ -908,6 +1060,8 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
                         
                         v2 translate0 = V2();
                         v2 translate1 = V2();
+                        
+                        u16 weapon_handle = g->PLAYER.weapon_collision_handles[iplayer];
                         
                         if(f_in_range(anim_state->t, 0.0f, 1.0f)) {
                             f32 t = anim_state->t;
@@ -941,12 +1095,23 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
                             hitcap.b = hitcap_rot * PLAYER_HITCAP_B_OFFSET + hitcap_translate;
                             hitcap.radius = PLAYER_HITCAP_RADIUS;
                             
-                            g->players.weapon_hitcaps[iplayer] = hitcap;
+                            g->PLAYER.weapon_hitcaps[iplayer] = hitcap;
+                            
+                            if(!weapon_handle) {
+                                weapon_handle = add_collision(&g->collision);
+                            }
                         } else {
                             anim_state->animating = false;
                             anim_state->cancellable = false;
-                            g->players.weapon_hitcaps[iplayer].radius = 0.0f;
+                            g->PLAYER.weapon_hitcaps[iplayer].radius = 0.0f;
+                            
+                            if(weapon_handle) {
+                                remove_collision(&g->collision, weapon_handle);
+                                weapon_handle = 0;
+                            }
                         }
+                        
+                        g->PLAYER.weapon_collision_handles[iplayer] = weapon_handle;
                         
                         if(!anim_state->cancellable && (anim_state->t > 0.8f)) {
                             anim_state->time_since_last_attack = 0.0f;
@@ -962,18 +1127,18 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
     }
     
     { // Turret control.
-        const s32 count = g->turrets.count;
+        const s32 count = g->TURRET.count;
         FORI(0, count) {
-            f32 cooldown = g->turrets.cooldowns[i];
-            const v2 p = g->turrets.ps[i];
+            f32 cooldown = g->TURRET.cooldowns[i];
+            const v2 p = g->TURRET.ps[i];
             
             if(cooldown <= 0.0f) {
                 const f32 spawn_dist = (BULLET_RADIUS + TURRET_RADIUS + PROJECTILE_SPAWN_DIST_EPSILON);
                 
-                s32 targets_in_range = g->players.count;
+                s32 targets_in_range = g->PLAYER.count;
                 if(targets_in_range > 0) {
                     V2_Closest_Result result;
-                    v2_closest(p, g->players.ps, g->players.count, &result);
+                    v2_closest(p, g->PLAYER.ps, g->PLAYER.count, &result);
                     
                     if(result.dist_sq) {
                         v2 direction = (result.closest - p) * f_inv_sqrt(result.dist_sq);
@@ -987,28 +1152,28 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
             
             cooldown -= dt32;
             
-            g->turrets.cooldowns[i] = cooldown;
+            g->TURRET.cooldowns[i] = cooldown;
         }
     }
     
     { // Bullet control.
-        s32 count = g->bullets.count;
+        s32 count = g->BULLET.count;
         
         FORI_TYPED(s32, 0, count) {
-            const v2 p = g->bullets.ps[i];
-            v2 dir    = g->bullets.directions [i];
-            f32 speed = g->bullets.speeds     [i];
+            const v2 p = g->BULLET.ps[i];
+            v2 dir    = g->BULLET.directions [i];
+            f32 speed = g->BULLET.speeds     [i];
             
             if((p.x < -MAP_TILE_HALFDIM) || (p.x >= MAP_TILE_HALFDIM) ||
                (p.y < -MAP_TILE_HALFDIM) || (p.y >= MAP_TILE_HALFDIM)) {
                 mark_entity_for_removal(g, Entity_Type::BULLET, i);
             } else {
-                g->bullets.directions[i] = dir;
-                g->bullets.dps[i] = dir * speed;
+                g->BULLET.directions[i] = dir;
+                g->BULLET.dps[i] = dir * speed;
             }
         }
         
-        g->bullets.count = count;
+        g->BULLET.count = count;
     }
     
     //
@@ -1016,25 +1181,56 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
     //
     // Check for solid collisions.
     
+    Collision_Batch collision_batches_by_type[] = {
+        {
+            g->PLAYER.ps,
+            g->PLAYER.dps,
+            g->PLAYER.collision_handles,
+            PLAYER_RADIUS,
+            &g->PLAYER.count,
+            Entity_Type::PLAYER,
+        },
+        {
+            g->TURRET.ps,
+            0,
+            g->TURRET.collision_handles,
+            TURRET_RADIUS,
+            &g->TURRET.count,
+            Entity_Type::TURRET,
+        },
+        {
+            g->BULLET.ps,
+            g->BULLET.dps,
+            g->BULLET.collision_handles,
+            BULLET_RADIUS,
+            &g->BULLET.count,
+            Entity_Type::BULLET,
+        },
+        {
+            g->TREE.ps,
+            0,
+            g->TREE.collision_handles,
+            TREE_RADIUS,
+            &g->TREE.count,
+            Entity_Type::TREE,
+        },
+        {
+            g->ITEM.ps,
+            0,
+            g->ITEM.collision_handles,
+            ITEM_RADIUS,
+            &g->ITEM.count,
+            Entity_Type::ITEM,
+        },
+    };
+    
     {
-        Movement_Batch batches[] = {
-            {
-                g->players.ps,
-                g->players.dps,
-                PLAYER_RADIUS,
-                g->players.count,
-                Entity_Type::PLAYER,
-            },
-            {
-                g->bullets.ps,
-                g->bullets.dps,
-                BULLET_RADIUS,
-                g->bullets.count,
-                Entity_Type::BULLET,
-            },
+        Collision_Batch *movement_batches[] = {
+            &collision_batches_by_type[Entity_Type::PLAYER],
+            &collision_batches_by_type[Entity_Type::BULLET],
         };
         
-        s32 batch_count = ARRAY_LENGTH(batches);
+        s32 batch_count = ARRAY_LENGTH(movement_batches);
         
         s32 cells_visited_capacity = 64;
         v2s *cells_visited = push_array(&temporary_memory, v2s, cells_visited_capacity);
@@ -1042,12 +1238,13 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
         v2s *cells_to_check = push_array(&temporary_memory, v2s, cells_to_check_capacity);
         
         FORI_NAMED(batch_index, 0, batch_count) {
-            Movement_Batch *batch = &batches[batch_index];
+            Collision_Batch *batch = movement_batches[batch_index];
             
             const f32 radius = batch->radius;
             const rect2 bounds = rect2_4f(-WORKING_SET_HALFDIM + radius, -WORKING_SET_HALFDIM + radius, WORKING_SET_HALFDIM - radius, WORKING_SET_HALFDIM - radius);
+            ssize count = *(batch->count);
             
-            FORI_NAMED(entity_index, 0, batch->count) {
+            FORI_NAMED(entity_index, 0, count) {
                 v2 p = batch->ps[entity_index];
                 v2 dp = batch->dps[entity_index] * dt32;
                 
@@ -1338,7 +1535,7 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
                             if(hit) {
                                 // We just want to stop the entity for this phase of the frame, since entity logic
                                 // is run after this; we could just log the fact that we hit level geometry here?
-                                g->bullets.hit_level_geometry[entity_index] = true;
+                                g->BULLET.hit_level_geometry[entity_index] = true;
                             }
                             
                             batch->ps[entity_index] = at;
@@ -1352,77 +1549,110 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
     //
     // At this point, every solid has found its final position for the frame.
     //
-    // Emit overlap queries.
     
-    { // Player attack.
-        FORI_NAMED(player_index, 0, g->players.count) {
-            cap2 hitcap = g->players.weapon_hitcaps[player_index];
+    { // Player overlaps.
+        const ssize count = g->PLAYER.count;
+        
+        FORI_NAMED(player_index, 0, count) {
+            Entity_Reference reference = make_entity_reference(Entity_Type::PLAYER, CAST(s32, player_index));
+            v2 p = g->PLAYER.ps[player_index];
             
-            if(hitcap.radius) {
-                FORI_NAMED(turret_index, 0, g->turrets.count) {
-                    v2 turret_p = g->turrets.ps[turret_index];
+            update_collision(&g->collision, g->PLAYER.collision_handles[player_index], reference, p, PLAYER_RADIUS);
+            
+            {
+                cap2 hitcap = g->PLAYER.weapon_hitcaps[player_index];
+                if(hitcap.radius) {
+                    v2 bounding_p = (hitcap.a + hitcap.b) * 0.5f;
+                    f32 bounding_radius = v2_length(hitcap.a - hitcap.b) * 0.5f + hitcap.radius;
                     
-                    if(disk_capsule_overlap(turret_p, TURRET_RADIUS, hitcap.a, hitcap.b, hitcap.radius)) {
-                        mark_entity_for_removal(g, Entity_Type::TURRET, CAST(s32, turret_index));
-                    }
+                    update_collision(&g->collision, g->PLAYER.weapon_collision_handles[player_index], reference, bounding_p, bounding_radius);
                 }
             }
         }
     }
     
     { // Bullet overlaps.
-        const s32 bullets = g->bullets.count;
-        const f32 radius = BULLET_RADIUS;
+        const s32 count = g->BULLET.count;
         
-        FORI_NAMED(bullet_index, 0, bullets) {
-            v2 p = g->bullets.ps[bullet_index];
-            bool hit_level_geometry = g->bullets.hit_level_geometry[bullet_index];
+        FORI_NAMED(bullet_index, 0, count) {
+            v2 p = g->BULLET.ps[bullet_index];
+            bool hit_level_geometry = g->BULLET.hit_level_geometry[bullet_index];
             
-            f32 player_radius = PLAYER_RADIUS;
-            FORI_NAMED(player_index, 0, g->players.count) {
-                v2 player_p = g->players.ps[player_index];
-                
-                if(disk_disk_overlap(p, radius, player_p, player_radius)) {
-                    mark_entity_for_removal(g, Entity_Type::PLAYER, CAST(s32, player_index));
-                }
-            }
+            Entity_Reference reference = make_entity_reference(Entity_Type::BULLET, CAST(s32, bullet_index));
+            update_collision(&g->collision, g->BULLET.collision_handles[bullet_index], reference, p, BULLET_RADIUS);
             
             if(hit_level_geometry) {
-                mark_entity_for_removal(g, Entity_Type::BULLET, CAST(s32, bullet_index));
+                mark_entity_for_removal(g, reference);
             }
         }
     }
     
-    { // Item pickup.
-        const s32 count = g->players.count;
+    overlap_update(&g->collision);
+    
+    { // Overlap results.
+        ssize item_selection = -1;
+        f32 item_best_dist_sq = LARGE_FLOAT;
         
-        FORI_NAMED(player_index, 0, count) {
-            v2 p = g->players.ps[player_index];
-            ssize selection = -1;
+        FORI(0, g->collision.overlap_pair_count) {
+            Entity_Reference a = g->collision.results[i][0];
+            Entity_Reference b = g->collision.results[i][1];
             
-            FORI_NAMED(item_index, 0, g->items.count) {
-                v2 item_p = g->items.ps[item_index];
-                
-                if(disk_disk_overlap(p, PLAYER_RADIUS, item_p, ITEM_PICKUP_RADIUS)) {
-                    selection = item_index;
-                }
+            if(a.type > b.type) {
+                SWAP(a, b);
             }
             
-            if((selection != -1) && BUTTON_PRESSED(in, use)) {
-                // Pick up the item.
-                Item_Contents *contents = &g->items.contents[selection];
-                
-                switch(contents->type) {
-                    case Item_Type::WEAPON: {
-                        SWAP(contents->weapon.type, g->players.weapons[player_index].type);
-                    } break;
+            switch(a.type) {
+                case Entity_Type::PLAYER: {
+                    u16 collision_handle = g->collision.overlap_pairs[i][0];
+                    v2 player_p = g->PLAYER.ps[a.index];
                     
-                    default: UNHANDLED;
+                    if(collision_handle == g->PLAYER.weapon_collision_handles[a.index]) {
+                        cap2 hitcap = g->PLAYER.weapon_hitcaps[a.index];
+                        
+                        switch(b.type) {
+                            case Entity_Type::TURRET: {
+                                v2 turret_p = g->TURRET.ps[b.index];
+                                
+                                if(disk_capsule_overlap(turret_p, TURRET_RADIUS, hitcap.a, hitcap.b, hitcap.radius)) {
+                                    mark_entity_for_removal(g, b);
+                                }
+                            } break;
+                        }
+                    } else {
+                        switch(b.type) {
+                            case Entity_Type::BULLET: {
+                                v2 bullet_p = g->BULLET.ps[b.index];
+                                
+                                if(disk_disk_overlap(player_p, PLAYER_RADIUS, bullet_p, BULLET_RADIUS)) {
+                                    mark_entity_for_removal(g, a);
+                                }
+                            } break;
+                            
+                            case Entity_Type::ITEM: {
+                                v2 item_p = g->ITEM.ps[b.index];
+                                
+                                const f32 pickup_dist_sq = (PLAYER_RADIUS + ITEM_RADIUS) * (PLAYER_RADIUS + ITEM_RADIUS);
+                                f32 dist_sq = v2_length_sq(item_p - player_p);
+                                if((dist_sq < pickup_dist_sq) && (dist_sq < item_best_dist_sq)) {
+                                    item_selection = b.index;
+                                    item_best_dist_sq = dist_sq;
+                                }
+                            } break;
+                        }
+                    }
                 }
             }
-            
-            g->players.item_selections[player_index] = CAST(s32, selection);
         }
+        
+        if((item_selection != -1) && BUTTON_PRESSED(in, use)) {
+            Item_Contents *contents = &g->ITEM.contents[item_selection];
+            
+            if(contents->type == Item_Type::WEAPON) {
+                SWAP(g->PLAYER.weapons[0].type, contents->weapon.type);
+            }
+        }
+        
+        g->PLAYER.item_selections[0] = CAST(s32, item_selection);
     }
     
     //
@@ -1434,7 +1664,7 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
     //
     if(non_visual_update) {
         v2s working_set_tile_p = g->working_set_tile_p;
-        v2 player_p = g->players.ps[g->current_player];
+        v2 player_p = g->PLAYER.ps[g->current_player];
         
         v2s working_set_tile_dp = V2S();
         
@@ -1529,58 +1759,27 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
                 
                 { // Renormalize working set coordinates.
                     v2 dp = -V2(working_set_tile_dp) * MAP_TILE_DIM;
-                    struct {
-                        v2 *ps;
-                        s32 count;
-                        u8 type;
-                    } position_batches[] = {
-                        {
-                            g->players.ps,
-                            g->players.count,
-                            Entity_Type::PLAYER,
-                        },
-                        {
-                            g->turrets.ps,
-                            g->turrets.count,
-                            Entity_Type::TURRET,
-                        },
-                        {
-                            g->bullets.ps,
-                            g->bullets.count,
-                            Entity_Type::BULLET,
-                        },
-                        {
-                            g->trees.ps,
-                            g->trees.count,
-                            Entity_Type::TREE,
-                        },
-                        {
-                            g->items.ps,
-                            g->items.count,
-                            Entity_Type::ITEM,
-                        },
-                    };
                     
                     rect2 working_set_bounds = rect2_minmax(V2(-WORKING_SET_HALFDIM), V2(WORKING_SET_HALFDIM));
-                    FORI_NAMED(batch_index, 0, ARRAY_LENGTH(position_batches)) {
-                        auto batch = position_batches[batch_index];
+                    FORI_NAMED(batch_index, 0, ARRAY_LENGTH(collision_batches_by_type)) {
+                        auto batch = &collision_batches_by_type[batch_index];
+                        ssize count = *(batch->count);
                         
-                        FORI_NAMED(p_index, 0, batch.count) {
-                            v2 p = batch.ps[p_index];
+                        FORI_NAMED(p_index, 0, count) {
+                            v2 p = batch->ps[p_index];
                             
                             v2 displaced_p = p + dp;
                             if(!v2_in_rect2(displaced_p, working_set_bounds)) {
-                                ASSERT(batch.type != Entity_Type::PLAYER);
+                                ASSERT(batch->type != Entity_Type::PLAYER);
                                 // Unload it.
                                 
-                                // @Flags: Entity_Flag::PERSISTENT
-                                if((batch.type == Entity_Type::TURRET) || (batch.type == Entity_Type::TREE) || (batch.type == Entity_Type::ITEM)) {
+                                if(is_persistent_type(batch->type)) {
                                     // Put it back in a tile.
                                     
                                     // @Cleanup: Use Precise_Position here instead?
                                     v2f64 global = V2F64(displaced_p) + V2F64(g->working_set_tile_p) * MAP_TILE_DIM;
                                     
-                                    switch(batch.type) {
+                                    switch(batch->type) {
                                         case Entity_Type::TURRET: {
                                             place_turret(&g->storage, global);
                                         } break;
@@ -1590,7 +1789,7 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
                                         } break;
                                         
                                         case Entity_Type::ITEM: {
-                                            place_item(&g->storage, global, g->items.contents[p_index]);
+                                            place_item(&g->storage, global, g->ITEM.contents[p_index]);
                                         } break;
                                         
                                         default: UNHANDLED;
@@ -1598,9 +1797,13 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
                                 }
                                 
                                 // Either way, remove it from the working set.
-                                mark_entity_for_removal(g, batch.type, CAST(s32, p_index));
+                                mark_entity_for_removal(g, batch->type, CAST(s32, p_index));
                             } else {
-                                batch.ps[p_index] = displaced_p;
+                                if(batch->collision_handles) {
+                                    update_collision(&g->collision, batch->collision_handles[p_index], make_entity_reference(batch->type, CAST(s32, p_index)), displaced_p, batch->radius);
+                                }
+                                
+                                batch->ps[p_index] = displaced_p;
                             }
                         }
                     }
@@ -1609,48 +1812,55 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
         }
     }
     
-    { // Processing entity removals.
+    if(non_visual_update) { // Processing entity removals.
         // We're assuming that we don't have duplicate deaths.
         FORI(0, g->entity_removal_count) {
-            Entity_Reference *removal = &g->entity_removals[i];
-            s32 index = removal->index;
+            Entity_Reference removal = g->entity_removals[i];
+            s32 index = removal.index;
             
-            switch(removal->type) {
+            Collision_Batch *batch = &collision_batches_by_type[removal.type];
+            if(batch->collision_handles) {
+                remove_collision(&g->collision, batch->collision_handles[removal.index]);
+                // This is assuming we're doing [remove] = [--count] right after.
+                batch->collision_handles[removal.index] = batch->collision_handles[*(batch->count) - 1];
+            }
+            
+            switch(removal.type) {
                 case Entity_Type::PLAYER: {
                     g->lost = true;
                 } break;
                 
                 case Entity_Type::BULLET: {
-                    s32 replace = --g->bullets.count;
+                    s32 replace = --g->BULLET.count;
                     ASSERT(replace >= 0);
                     
-                    g->bullets.ps                [index] = g->bullets.ps                [replace];
-                    g->bullets.directions        [index] = g->bullets.directions        [replace];
-                    g->bullets.speeds            [index] = g->bullets.speeds            [replace];
-                    g->bullets.hit_level_geometry[index] = false;
+                    g->BULLET.ps                [index] = g->BULLET.ps                [replace];
+                    g->BULLET.directions        [index] = g->BULLET.directions        [replace];
+                    g->BULLET.speeds            [index] = g->BULLET.speeds            [replace];
+                    g->BULLET.hit_level_geometry[index] = false;
                 } break;
                 
                 case Entity_Type::TURRET: {
-                    s32 replace = --g->turrets.count;
+                    s32 replace = --g->TURRET.count;
                     ASSERT(replace >= 0);
                     
-                    g->turrets.ps       [index] = g->turrets.ps       [replace];
-                    g->turrets.cooldowns[index] = g->turrets.cooldowns[replace];
+                    g->TURRET.ps       [index] = g->TURRET.ps       [replace];
+                    g->TURRET.cooldowns[index] = g->TURRET.cooldowns[replace];
                 } break;
                 
                 case Entity_Type::TREE: {
-                    s32 replace = --g->trees.count;
+                    s32 replace = --g->TREE.count;
                     ASSERT(replace >= 0);
                     
-                    g->trees.ps[index] = g->trees.ps[replace];
+                    g->TREE.ps[index] = g->TREE.ps[replace];
                 } break;
                 
                 case Entity_Type::ITEM: {
-                    s32 replace = --g->items.count;
+                    s32 replace = --g->ITEM.count;
                     ASSERT(replace >= 0);
                     
-                    g->items.ps[index] = g->items.ps[replace];
-                    g->items.contents[index] = g->items.contents[replace];
+                    g->ITEM.ps[index] = g->ITEM.ps[replace];
+                    g->ITEM.contents[index] = g->ITEM.contents[replace];
                 } break;
                 
                 default: UNHANDLED;
@@ -1665,7 +1875,7 @@ void Implicit_Context::g_full_update(Game *g, Input *_in, const f64 dt, Audio_In
     //
     
     if(g->lost) {
-        g->players.count = 0;
+        g->PLAYER.count = 0;
     }
     
     advance_input(_in);
@@ -1675,15 +1885,17 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
     TIME_BLOCK;
     if(g->current_level_index) {
         const u32 focused_player = g->current_player;
-        const v2 camera_p = g->players.ps[focused_player];
+        const v2 camera_p = g->PLAYER.ps[focused_player];
         const v2 camera_dir = V2(1.0f, 0.0f);
         const f32 camera_zoom = g->camera_zoom;
         const v2 viewport_halfdim = V2(GAME_ASPECT_RATIO_X, GAME_ASPECT_RATIO_Y) * camera_zoom * 0.5f;
         
         render_set_transform_game_camera(command_queue->command_list_handle, camera_p, camera_dir, camera_zoom);
         
+        render_set_texture(command_queue, 0);
+        
         { // Players
-            const u32 count = g->players.count;
+            const u32 count = g->PLAYER.count;
             const u16 handle = GET_MESH_HANDLE(renderer, player);
             
             const v2 view_dir = v2_normalize(g->xhair_offset);
@@ -1696,7 +1908,7 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
                 instance.rot = rotation;
                 
                 for(u32 i = 0; i < count; ++i) {
-                    instance.offset = g->players.ps[i];
+                    instance.offset = g->PLAYER.ps[i];
                     
                     render_quad(renderer, command_queue, &instance);
                 }
@@ -1707,8 +1919,8 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
                 hitcap.color = V4(1.0f, 0.0f, 0.0f, 1.0f);
                 hitcap.scale = V2(PLAYER_HITCAP_RANGE - PLAYER_HITCAP_RADIUS - PROJECTILE_SPAWN_DIST_EPSILON - PLAYER_RADIUS, PLAYER_HITCAP_RADIUS * 2.0f);
                 FORI(0, count) {
-                    if(g->players.animation_states[i].animating) {
-                        cap2 cap = g->players.weapon_hitcaps[i];
+                    if(g->PLAYER.animation_states[i].animating) {
+                        cap2 cap = g->PLAYER.weapon_hitcaps[i];
                         
                         hitcap.offset = (cap.a + cap.b) * 0.5f;
                         hitcap.rot = v2_normalize(cap.b - cap.a);
@@ -1719,8 +1931,10 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
             }
         }
         
+        render_set_texture(command_queue, 1);
+        
         { // Trees
-            const s32 count = g->trees.count;
+            const s32 count = g->TREE.count;
             Mesh_Instance *instances = reserve_instances(command_queue, GET_MESH_HANDLE(renderer, quad), 2 * count);
             
             Mesh_Instance trunk;
@@ -1734,7 +1948,7 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
             leaves.scale = V2(1.0f, 1.0f);
             
             FORI(0, count) {
-                trunk.offset = g->trees.ps[i];
+                trunk.offset = g->TREE.ps[i];
                 trunk.offset.y += trunk.scale.y * 0.5f;
                 leaves.offset = trunk.offset + V2(0.0f, 0.7f);
                 
@@ -1744,7 +1958,7 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
         }
         
         { // Turrets
-            const s32 count = g->turrets.count;
+            const s32 count = g->TURRET.count;
             
             Mesh_Instance instance;
             instance.color = V4(0.3f, 0.1f, 0.1f, 1.0f);
@@ -1752,14 +1966,14 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
             instance.scale = V2(TURRET_RADIUS * 2.0f);
             
             FORI(0, count) {
-                instance.offset = g->turrets.ps[i];
+                instance.offset = g->TURRET.ps[i];
                 
                 render_quad(renderer, command_queue, &instance);
             }
         }
         
         { // Bullets
-            const s32 count = g->bullets.count;
+            const s32 count = g->BULLET.count;
             
             Mesh_Instance instance;
             instance.color = V4(1.0f, 0.0f, 0.0f, 1.0f);
@@ -1767,24 +1981,24 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
             instance.scale = V2(BULLET_RADIUS * 2.0f);
             
             FORI(0, count) {
-                instance.offset = g->bullets.ps[i];
+                instance.offset = g->BULLET.ps[i];
                 
                 render_quad(renderer, command_queue, &instance);
             }
         }
         
         { // Items
-            const s32 count = g->items.count;
+            const s32 count = g->ITEM.count;
             
             Mesh_Instance instance;
             instance.rot = V2(0.707f, 0.707f);
-            instance.scale = V2(ITEM_PICKUP_RADIUS);
+            instance.scale = V2(ITEM_RADIUS);
             
             FORI(0, count) {
-                instance.offset = g->items.ps[i];
+                instance.offset = g->ITEM.ps[i];
                 
                 instance.color = V4(0.0f, 0.8f, 0.2f, 1.0f);
-                if(g->players.item_selections[0] == i) {
+                if(g->PLAYER.item_selections[0] == i) {
                     instance.color = V4(1.0f, 0.8f, 0.4f, 1.0f);
                 }
                 
@@ -1798,7 +2012,7 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
             instance.scale = V2(0.1f);
             instance.rot = V2(1.0f, 0.0f);
             
-            v2s cell_p = working_set_to_cell(g->players.ps[g->current_player]);
+            v2s cell_p = working_set_to_cell(g->PLAYER.ps[g->current_player]);
             v2s tile_p = cell_p / TILE_SDF_RESOLUTION;
             v2s local_cell = cell_p % TILE_SDF_RESOLUTION;
             
@@ -1817,7 +2031,7 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
                 }
             }
         }
-#else
+#elif 0
         { // Tiles.
             Mesh_Instance instance = {};
             instance.scale = V2(MAP_TILE_DIM);
@@ -1836,6 +2050,45 @@ void Implicit_Context::draw_game_single_threaded(Renderer *renderer, Render_Comm
                     
                     render_quad_outline(renderer, command_queue, &instance, 0.25f);
                 }
+            }
+        }
+#elif 0
+        { // AABB tree.
+            Mesh_Instance instance = {};
+            instance.rot = V2(1.0f, 0.0f);
+            v4 colors[] = {
+                V4(1.0f, 0.0f, 0.0f, 1.0f),
+                V4(0.0f, 1.0f, 0.0f, 1.0f),
+                V4(0.0f, 0.0f, 1.0f, 1.0f),
+                V4(1.0f, 1.0f, 0.0f, 1.0f),
+                V4(1.0f, 0.0f, 1.0f, 1.0f),
+                V4(0.0f, 1.0f, 1.0f, 1.0f),
+                V4(1.0f, 1.0f, 1.0f, 1.0f),
+            };
+            
+            Game_Collision *collision = &g->collision;
+            
+            u16 to_draw[256];
+            to_draw[0] = 0;
+            s32 to_draw_count = 1;
+            while(to_draw_count > 0) {
+                u16 node_index = to_draw[--to_draw_count];
+                
+                Aabb_Node *node = &collision->nodes[node_index];
+                
+                instance.scale = rect2_dim(node->aabb);
+                instance.offset = rect2_center(node->aabb);
+                
+                if(node->inner) {
+                    instance.color = V4(0.5f, 0.5f, 0.5f, 1.0f);
+                    
+                    to_draw[to_draw_count++] = node->left;
+                    to_draw[to_draw_count++] = node->right;
+                } else {
+                    instance.color = V4(1.0f, 1.0f, 0.0f, 1.0f);
+                }
+                
+                render_quad_outline(renderer, command_queue, &instance, 0.05f);
             }
         }
 #endif
@@ -2059,6 +2312,16 @@ GAME_INIT_MEMORY(Implicit_Context::g_init_mem) {
         
         maybe_flush_draw_commands(command_queue);
         
+        { // @Temporary
+            Loaded_BMP blank = load_bmp(STRING("textures/blank.bmp"));
+            Loaded_BMP untextured = load_bmp(STRING("textures/untextured.bmp"));
+            Loaded_BMP hitbox = load_bmp(STRING("textures/default_hitbox.bmp"));
+            
+            os_platform.upload_texture_to_gpu_rgba8(command_queue->command_list_handle, Texture_Id::BLANK, CAST(u8 *, blank.data), V2S(blank.width, blank.height));
+            os_platform.upload_texture_to_gpu_rgba8(command_queue->command_list_handle, Texture_Id::UNTEXTURED, CAST(u8 *, untextured.data), V2S(untextured.width, untextured.height));
+            os_platform.upload_texture_to_gpu_rgba8(command_queue->command_list_handle, Texture_Id::FONT_ATLAS, CAST(u8 *, hitbox.data), V2S(hitbox.width, hitbox.height));
+        }
+        
         os_platform.submit_commands(&command_queue->command_list_handle, 1, true);
         render_end_frame(renderer);
     }
@@ -2239,7 +2502,7 @@ GAME_RUN_FRAME(Implicit_Context::g_run_frame) {
                 Input clone_input = game_input;
                 
                 clone_game_state(&g_cl->g, &g_cl->visual_state);
-                g_full_update(&g_cl->visual_state, &clone_input, frame_remainder, 0, 0);
+                // g_full_update(&g_cl->visual_state, &clone_input, frame_remainder, 0, 0);
             }
             
             program_state->input = game_input;

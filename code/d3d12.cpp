@@ -141,52 +141,61 @@ const u32 another_image[an_image_height][an_image_width] = {
 
 static char *new_shader = R"(
                         struct Vertex_In {
-                        float2 p: VERTEX_POSITION;
-                        float4 color: VERTEX_COLOR;
-                        
-                        float2 offset: INSTANCE_OFFSET;
-                        float2 scale: INSTANCE_SCALE;
-                        float2 rot: INSTANCE_ROTATION;
-                        float4 instance_color: INSTANCE_COLOR;
+                            float2 p: VERTEX_POSITION;
+                            float2 uv: VERTEX_UV;
+                            float4 color: VERTEX_COLOR;
+                            
+                            float2 offset: INSTANCE_OFFSET;
+                            float2 scale: INSTANCE_SCALE;
+                            float2 rot: INSTANCE_ROTATION;
+                            float4 instance_color: INSTANCE_COLOR;
                         };
                         
                         struct Vertex_Out {
-                          float4     p: SV_POSITION; // Clip-space location
-                          float4 color: COLOR;
+                            float4     p: SV_POSITION; // Clip-space location
+                            float4 color: COLOR;
+                            float2    uv: TEXCOORD;
                         };
                         
-                        row_major float4x4 camera_transform: register(b0);
-                        
+                        cbuffer constants : register(b0) {
+                        row_major float4x4 camera_transform;
+                         uint texture_id;
+                         }
+                         
                         SamplerState s: register(s0);
-                        Texture2D    t: register(t0);
+                        Texture2D<float4> t[3]: register(t0);
                         
                         Vertex_Out vertex_shader(Vertex_In input) {
-                        float2 p = input.p;
-                        
-                        float2 rot = input.rot;
-                        float2 scale = input.scale;
-                        float2 offset = input.offset;
-                        
-                        float4 color = input.color;
-                        
-                        
-                        p *= scale;
-                        p = float2((p.x * rot.x) - (p.y * rot.y), (p.x * rot.y) + (p.y * rot.x));
-                        p += offset;
-                        
-                          Vertex_Out output;
-                          output.p     = mul(float4(p, 0.0f, 1.0f), camera_transform);
-                          output.color = float4(color.x * input.instance_color.x,
-color.y * input.instance_color.y,
-color.z * input.instance_color.z,
-color.w * input.instance_color.w);
-
-                          return output;
+                            float2 p = input.p;
+                            
+                            float2 rot = input.rot;
+                            float2 scale = input.scale;
+                            float2 offset = input.offset;
+                            
+                            float4 color = input.color;
+                            
+                            
+                            p *= scale;
+                            p = float2((p.x * rot.x) - (p.y * rot.y), (p.x * rot.y) + (p.y * rot.x));
+                            p += offset;
+                            
+                            Vertex_Out output;
+                            output.p     = mul(float4(p, 0.0f, 1.0f), camera_transform);
+                            output.color = color * input.instance_color;
+                            output.uv    = input.uv;
+                            
+                            return output;
                         }
                         
                         float4 pixel_shader(Vertex_Out input) : SV_Target {
-                        float4 out_color = input.color;
-                          return out_color * out_color;
+                        // float4 texture_color = t[0].Sample(s, input.uv);
+                        
+                            float4 out_color = float4(1.0f, 0.0f, 0.0f, 1.0f);
+                            if(texture_id != 0) {
+                            out_color = float4(0.0f, 1.0f, 1.0f, 1.0f);
+                            }
+                            
+                            return out_color * out_color;
                         }
                         )";
 
@@ -196,6 +205,7 @@ color.w * input.instance_color.w);
 #define MAX_CONSTANT_BUFFER_COUNT 256
 #define MAX_MESH_COUNT 256
 #define MAX_EDITABLE_MESH_COUNT 256
+#define MAX_TEXTURE_COUNT 256
 
 struct Stored_Command_List {
     ID3D12CommandAllocator    *allocator;
@@ -262,6 +272,7 @@ static struct {
     IDXGISwapChain3 *swap_chain3;
     ID3D12DescriptorHeap *rtv_heap;
     ID3D12DescriptorHeap *dsv_heap;
+    ID3D12DescriptorHeap *srv_heap;
     
     s32 current_backbuffer;
     ID3D12Resource *backbuffers                         [BACKBUFFER_COUNT];
@@ -272,12 +283,11 @@ static struct {
     ID3D12RootSignature *root_signature;
     ID3D12PipelineState *pipeline_state;
     
-    ID3D12DescriptorHeap       *shader_descriptor_heap;
     
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pipeline_state_desc;
     bool changed_pipeline_state_desc;
     
-    ID3DBlob* shaders[Shader_ID::COUNT];
+    ID3DBlob* shaders[Shader_Id::COUNT];
     
     u64 frame_completion_fence_value;
     ID3D12Fence *frame_completion_fence;
@@ -291,6 +301,9 @@ static struct {
     
     s32 mesh_count;
     Mesh meshes[MAX_MESH_COUNT];
+    
+    s32 texture_count;
+    Stored_Texture textures[MAX_TEXTURE_COUNT];
     
     s32 editable_mesh_count;
     Editable_Mesh editable_meshes[MAX_EDITABLE_MESH_COUNT];
@@ -572,7 +585,7 @@ static void update_editable_mesh(u16 list_handle, u16 editable_handle, s32 index
 }
 
 static void make_constant_buffers(s32 *descriptor_indices, usize *buffer_lengths, s32 count, Stored_Constant_Buffer *out) {
-    D3D12_CPU_DESCRIPTOR_HANDLE base_descriptor = d3d.shader_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
+    D3D12_CPU_DESCRIPTOR_HANDLE base_descriptor = d3d.srv_heap->GetCPUDescriptorHandleForHeapStart();
     s32 descriptor_size = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     
     FORI(0, count) {
@@ -596,16 +609,14 @@ static void make_constant_buffers(s32 *descriptor_indices, usize *buffer_lengths
     }
 }
 
-static void upload_texture_to_gpu_rgba8(ID3D12Device* device, ID3D12GraphicsCommandList* command_list, 
-                                        ID3D12DescriptorHeap* srv_heap, s32 index, u8* data, s32 width, s32 height) {
-#if 0 // :RemoveTextures
-    ASSERT(index < Texture_ID::COUNT);
+GPU_UPLOAD_TEXTURE_TO_GPU_RGBA8(upload_texture_to_gpu_rgba8) {
+    ASSERT(index < Texture_Id::COUNT);
     ID3D12Resource *texture;
     D3D12_RESOURCE_DESC texture_desc = {};
     texture_desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     texture_desc.Alignment        = 0;
-    texture_desc.Width            = width;
-    texture_desc.Height           = height;
+    texture_desc.Width            = dim.x;
+    texture_desc.Height           = dim.y;
     texture_desc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
     texture_desc.DepthOrArraySize = 1;
     texture_desc.SampleDesc.Count = 1;
@@ -615,33 +626,36 @@ static void upload_texture_to_gpu_rgba8(ID3D12Device* device, ID3D12GraphicsComm
     {
         D3D12_HEAP_PROPERTIES texture_heap_properties = make_heap_properties(D3D12_HEAP_TYPE_DEFAULT);
         
-        device->CreateCommittedResource(&texture_heap_properties, D3D12_HEAP_FLAG_NONE, &texture_desc,
-                                        D3D12_RESOURCE_STATE_COPY_DEST, 0, IID_PPV_ARGS(&texture));
+        d3d.device->CreateCommittedResource(&texture_heap_properties, D3D12_HEAP_FLAG_NONE, &texture_desc,
+                                            D3D12_RESOURCE_STATE_COPY_DEST, 0, IID_PPV_ARGS(&texture));
     }
     
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT texture_footprint = {};
     u64 upload_size = 0;
     ID3D12Resource *upload_buffer = make_upload_buffer_of_appropriate_size(&texture_desc, &texture_footprint, &upload_size);
     
-    {
+    { // Writing to the buffer.
         D3D12_RANGE read_range       = {};
         void*       buffer_address   = 0;
         upload_buffer->Map(0, &read_range, &buffer_address);
         
+        u32 width_in_bytes = dim.x * sizeof(u32);
+        
         u8* copy_from = data;
         u8* copy_to   = CAST(u8*, buffer_address);
-        FORI(0, height) {
+        FORI(0, dim.y) { // This loop is kind of weird due to pitch not necessarily being width.
             u32 bytes_copied = 0;
-            while(bytes_copied <= (texture_footprint.Footprint.RowPitch - width)) {
-                mem_copy(copy_from, copy_to + bytes_copied, width);
-                bytes_copied += width;
+            while(bytes_copied <= (texture_footprint.Footprint.RowPitch - width_in_bytes)) {
+                mem_copy(copy_from, copy_to + bytes_copied, width_in_bytes);
+                bytes_copied += width_in_bytes;
             }
-            copy_from += width;
+            copy_from += width_in_bytes;
             copy_to += texture_footprint.Footprint.RowPitch;
         }
         upload_buffer->Unmap(0, 0);
     }
     
+    ID3D12GraphicsCommandList *command_list = get_command_list(list_handle)->list;
     {
         D3D12_TEXTURE_COPY_LOCATION copy_destination = {};
         copy_destination.pResource        = texture;
@@ -669,37 +683,21 @@ static void upload_texture_to_gpu_rgba8(ID3D12Device* device, ID3D12GraphicsComm
         srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srv_desc.Texture2D.MipLevels = 1;
         
-        D3D12_CPU_DESCRIPTOR_HANDLE cpu_descriptor = srv_heap->GetCPUDescriptorHandleForHeapStart();
+        D3D12_CPU_DESCRIPTOR_HANDLE cpu_descriptor = d3d.srv_heap->GetCPUDescriptorHandleForHeapStart();
         s32 descriptor_size = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         cpu_descriptor.ptr += descriptor_size * index;
         
-        device->CreateShaderResourceView(texture, &srv_desc, cpu_descriptor);
+        d3d.device->CreateShaderResourceView(texture, &srv_desc, cpu_descriptor);
         
         d3d.textures[index].resource = texture;
         d3d.textures[index].desc     = srv_desc;
     }
-#endif
 }
 
 static void d3d_resize_backbuffers(v2s dim) {
     d3d.backbuffers_need_to_be_resized = true;
     d3d.new_backbuffer_dim = dim;
 }
-
-#if 0 // :RemoveTextures
-GPU_SET_TEXTURE(set_texture) {
-    ASSERT(id < Texture_ID::COUNT);
-    ASSERT(d3d.textures[id].resource);
-    
-    D3D12_CPU_DESCRIPTOR_HANDLE cpu_descriptor = d3d.shader_descriptor_heap->GetCPUDescriptorHandleForHeapStart();
-#if 0 // If we need multiple textures in our shader.
-    s32 descriptor_size = d3d.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    cpu_descriptor.ptr += descriptor_size * texture_index_in_shader_code;
-#endif
-    
-    d3d.device->CreateShaderResourceView(d3d.textures[id].resource, &d3d.textures[id].desc, cpu_descriptor);
-}
-#endif
 
 GPU_SET_TRANSFORM(set_transform) {
     auto list = get_command_list(list_handle)->list;
@@ -767,21 +765,17 @@ GPU_MAKE_VERTEX_BUFFERS(make_vertex_buffers) {
     d3d.mutable_vertex_buffer_count += count;
 }
 
-#if 0
-GPU_SET_VERTEX_SHADER(set_vertex_shader) {
+static void set_vertex_shader(u16 id) {
     d3d.pipeline_state_desc.VS.pShaderBytecode = d3d.shaders[id]->GetBufferPointer();
     d3d.pipeline_state_desc.VS.BytecodeLength  = d3d.shaders[id]->GetBufferSize();
     d3d.changed_pipeline_state_desc = true;
 }
-#endif
-#if 0
-GPU_SET_PIXEL_SHADER(set_pixel_shader) {
+static void set_pixel_shader(u16 id) {
     d3d.pipeline_state_desc.PS.pShaderBytecode = d3d.shaders[id]->GetBufferPointer();
     d3d.pipeline_state_desc.PS.BytecodeLength  = d3d.shaders[id]->GetBufferSize();
     d3d.changed_pipeline_state_desc = true;
 }
-#endif
-#if 0 // :RemoveTextures
+
 GPU_UPDATE_TEXTURE_RGBA(update_texture_rgba) {
     // @Temporary
     // Instead of allocating a new upload buffer every time, we'd like to make one and keep it throughout
@@ -834,7 +828,6 @@ GPU_UPDATE_TEXTURE_RGBA(update_texture_rgba) {
         d3d.command_lists[0].list->CopyTextureRegion(&copy_destination, bottom_left.x, bottom_left.y, 0, &copy_source, &copy_rect);
     }
 }
-#endif
 
 static void update_vertex_buffer(ID3D12GraphicsCommandList *list, Mutable_Vertex_Buffer *buffer) {
     D3D12_RESOURCE_BARRIER barriers[1] = {
@@ -915,8 +908,8 @@ static void begin_frame_and_clear(u16 list_handle, u16 frame_index, v4 clear_col
     auto backbuffer_descriptor = d3d.backbuffer_descriptors[d3d.current_backbuffer];
     auto depth_buffer_descriptor = d3d.depth_buffer_descriptors[d3d.current_backbuffer];
     
-    ID3D12DescriptorHeap *descriptor_heaps[] = {d3d.shader_descriptor_heap};
-    auto descriptor_table = d3d.shader_descriptor_heap->GetGPUDescriptorHandleForHeapStart();
+    ID3D12DescriptorHeap *descriptor_heaps[] = {d3d.srv_heap};
+    auto descriptor_table = d3d.srv_heap->GetGPUDescriptorHandleForHeapStart();
     
     rect2s draw_rect = rect2s_fit(16, 9, CAST(s32, backbuffer->GetDesc().Width), CAST(s32, backbuffer->GetDesc().Height));
     
@@ -1019,14 +1012,19 @@ static void d3d_init(HWND wnd_handle) {
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc = {};
         
-        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         desc.NumDescriptors = BACKBUFFER_COUNT;
         desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         
+        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         d3d.device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&d3d.rtv_heap));
         
         desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
         d3d.device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&d3d.dsv_heap));
+        
+        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        desc.NumDescriptors = Texture_Id::COUNT;
+        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        d3d.device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&d3d.srv_heap));
     }
     
     query_backbuffers();
@@ -1040,7 +1038,6 @@ static void d3d_init(HWND wnd_handle) {
         static_sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
         static_sampler.ComparisonFunc   = D3D12_COMPARISON_FUNC_NEVER;
         static_sampler.ShaderRegister   = 0;
-        static_sampler.RegisterSpace    = 0;
         static_sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         
         D3D12_DESCRIPTOR_RANGE pixel_shader_descriptor_ranges[1] = {};
@@ -1048,19 +1045,21 @@ static void d3d_init(HWND wnd_handle) {
             auto range = &pixel_shader_descriptor_ranges[0];
             
             range->RangeType                         = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-            range->NumDescriptors                    = 1;
+            range->NumDescriptors                    = Texture_Id::COUNT;
             range->BaseShaderRegister                = 0;
-            range->RegisterSpace                     = 0;
             range->OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
         }
         
         
         D3D12_ROOT_PARAMETER root_params[2] = {};
-        // Transform
+        
+        // Constant buffer
+        // @Speed: We'd like not to have D3D12_SHADER_VISIBILITY_ALL, but separating it out into
+        // two buffers didn't work last time, while this does.
         root_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         root_params[0].Constants.ShaderRegister = 0;
-        root_params[0].Constants.Num32BitValues = 16;
-        root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+        root_params[0].Constants.Num32BitValues = 17;
+        root_params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         
         // Texture
         root_params[1].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -1093,13 +1092,14 @@ static void d3d_init(HWND wnd_handle) {
         
         string code = make_string(CAST(u8*, new_shader), cstring_length(new_shader));
         
-        d3d.shaders[Shader_ID::STANDARD_VERTEX] = compile_shader(compile_func, code, "vertex_shader", "vs_5_0");
-        d3d.shaders[Shader_ID::STANDARD_PIXEL]  = compile_shader(compile_func, code,  "pixel_shader", "ps_5_0");
+        d3d.shaders[Shader_Id::STANDARD_VERTEX] = compile_shader(compile_func, code, "vertex_shader", "vs_5_0");
+        d3d.shaders[Shader_Id::STANDARD_PIXEL]  = compile_shader(compile_func, code,  "pixel_shader", "ps_5_0");
     }
     
     {
         D3D12_INPUT_ELEMENT_DESC input_elements[] = {
             {"VERTEX_POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, D3D12_INPUT_SLOTS::PER_VERTEX, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"VERTEX_UV", 0, DXGI_FORMAT_R32G32_FLOAT, D3D12_INPUT_SLOTS::PER_VERTEX, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
             {"VERTEX_COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D12_INPUT_SLOTS::PER_VERTEX, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
             {"INSTANCE_OFFSET", 0, DXGI_FORMAT_R32G32_FLOAT, D3D12_INPUT_SLOTS::PER_INSTANCE, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1},
             {"INSTANCE_SCALE", 0, DXGI_FORMAT_R32G32_FLOAT, D3D12_INPUT_SLOTS::PER_INSTANCE, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1},
@@ -1109,10 +1109,10 @@ static void d3d_init(HWND wnd_handle) {
         
         D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
         desc.pRootSignature     = d3d.root_signature;
-        desc.VS.pShaderBytecode = d3d.shaders[Shader_ID::STANDARD_VERTEX]->GetBufferPointer();
-        desc.VS.BytecodeLength  = d3d.shaders[Shader_ID::STANDARD_VERTEX]->GetBufferSize();
-        desc.PS.pShaderBytecode = d3d.shaders[Shader_ID::STANDARD_PIXEL]->GetBufferPointer();
-        desc.PS.BytecodeLength  = d3d.shaders[Shader_ID::STANDARD_PIXEL]->GetBufferSize();
+        desc.VS.pShaderBytecode = d3d.shaders[Shader_Id::STANDARD_VERTEX]->GetBufferPointer();
+        desc.VS.BytecodeLength  = d3d.shaders[Shader_Id::STANDARD_VERTEX]->GetBufferSize();
+        desc.PS.pShaderBytecode = d3d.shaders[Shader_Id::STANDARD_PIXEL]->GetBufferPointer();
+        desc.PS.BytecodeLength  = d3d.shaders[Shader_Id::STANDARD_PIXEL]->GetBufferSize();
         FORI(0, ARRAY_LENGTH(desc.BlendState.RenderTarget)) {
             auto render_target = &desc.BlendState.RenderTarget[i];
             render_target->RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
@@ -1144,17 +1144,6 @@ static void d3d_init(HWND wnd_handle) {
         d3d.device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&d3d.pipeline_state));
     }
     
-    
-    { // @Duplication
-        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
-        
-        desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        desc.NumDescriptors = 3;
-        desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        
-        d3d.device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&d3d.shader_descriptor_heap));
-    }
-    
     d3d.frame_completion_fence_value = 1;
     d3d.frame_completion_event = CreateEventW(0, 0, FALSE, 0);
     d3d.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&d3d.frame_completion_fence));
@@ -1170,14 +1159,36 @@ static void draw_mesh_instances(u16 list_handle, u16 instance_buffer_handle, Dra
     
     FORI(0, command_count) {
         auto command = &commands[i];
-        auto mesh = get_mesh(command->mesh_handle);
         
-        command_list->IASetVertexBuffers(D3D12_INPUT_SLOTS::PER_VERTEX, 1, &mesh->vertex_buffer_view);
-        command_list->IASetVertexBuffers(D3D12_INPUT_SLOTS::PER_INSTANCE, 1, instance_buffer_view);
-        command_list->IASetIndexBuffer(&mesh->index_buffer_view);
-        command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        
-        command_list->DrawIndexedInstanced(mesh->index_count, command->instance_count, 0, 0, running_instance_count);
-        running_instance_count += command->instance_count;
+        switch(command->type) {
+            using namespace Draw_Command_Type;
+            
+            case INSTANCES: {
+                auto mesh = get_mesh(command->mesh_handle);
+                
+                command_list->IASetVertexBuffers(D3D12_INPUT_SLOTS::PER_VERTEX, 1, &mesh->vertex_buffer_view);
+                command_list->IASetVertexBuffers(D3D12_INPUT_SLOTS::PER_INSTANCE, 1, instance_buffer_view);
+                command_list->IASetIndexBuffer(&mesh->index_buffer_view);
+                command_list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                
+                command_list->DrawIndexedInstanced(mesh->index_count, command->instance_count, 0, 0, running_instance_count);
+                running_instance_count += command->instance_count;
+            } break;
+            
+            case TEXTURE: {
+                u32 id = command->texture_id;
+                command_list->SetGraphicsRoot32BitConstants(0, 1, &id, 16);
+            } break;
+            
+            case VERTEX_SHADER: {
+                set_vertex_shader(command->vertex_shader_id);
+            } break;
+            
+            case PIXEL_SHADER: {
+                set_pixel_shader(command->pixel_shader_id);
+            } break;
+            
+            default: UNHANDLED;
+        }
     }
 }

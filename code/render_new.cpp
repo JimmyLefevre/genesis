@@ -68,7 +68,7 @@ static Mesh_Instance *reserve_instances(Render_Command_Queue *queue, u16 mesh_ha
         flush_draw_commands(queue);
         new_instance_count = 0;
         queue->draw_command_count = 0;
-        // @Incomplete: We either need to ExecuteCommandLists() and wait, or to swap to another instance buffer.
+        // @Incomplete: We either need to ExecuteCommandLists() and wait, or swap to another instance buffer.
         UNHANDLED;
     }
     
@@ -76,11 +76,13 @@ static Mesh_Instance *reserve_instances(Render_Command_Queue *queue, u16 mesh_ha
     {
         if(command_count) {
             auto last_command = &queue->draw_commands[command_count - 1];
-            if(last_command->mesh_handle == mesh_handle) {
+            
+            if((last_command->type == Draw_Command_Type::INSTANCES) && (last_command->mesh_handle == mesh_handle)) {
                 last_command->instance_count += instance_count;
             } else {
                 auto new_command = &queue->draw_commands[command_count++];
                 
+                new_command->type = Draw_Command_Type::INSTANCES;
                 new_command->mesh_handle = mesh_handle;
                 new_command->instance_count = instance_count;
             }
@@ -94,6 +96,28 @@ static Mesh_Instance *reserve_instances(Render_Command_Queue *queue, u16 mesh_ha
     Mesh_Instance *result = &queue->instances[current_instance_count];
     current_instance_count = new_instance_count;
     return result;
+}
+
+static void render_set_texture(Render_Command_Queue *queue, u16 id) {
+    ASSERT(queue->draw_command_count < queue->instance_capacity);
+    Draw_Command *command = &queue->draw_commands[queue->draw_command_count++];
+    
+    command->type = Draw_Command_Type::TEXTURE;
+    command->texture_id = id;
+}
+static void render_set_vertex_shader(Render_Command_Queue *queue, u16 id) {
+    ASSERT(queue->draw_command_count < queue->instance_capacity);
+    Draw_Command *command = &queue->draw_commands[queue->draw_command_count++];
+    
+    command->type = Draw_Command_Type::VERTEX_SHADER;
+    command->vertex_shader_id = id;
+}
+static void render_set_pixel_shader(Render_Command_Queue *queue, u16 id) {
+    ASSERT(queue->draw_command_count < queue->instance_capacity);
+    Draw_Command *command = &queue->draw_commands[queue->draw_command_count++];
+    
+    command->type = Draw_Command_Type::PIXEL_SHADER;
+    command->pixel_shader_id = id;
 }
 
 static inline void render_meshes(Render_Command_Queue *queue, u16 mesh_handle, Mesh_Instance *instances, s32 instance_count) {
@@ -111,8 +135,8 @@ static void render_quad_outline(Renderer *renderer, Render_Command_Queue *queue,
     Mesh_Instance outline[4];
     
     v2 center = instance->offset;
-    v2 x_axis = v2_complex_prod(V2(instance->scale.x, 0.0f), instance->rot);
-    v2 y_axis = v2_complex_prod(V2(0.0f, instance->scale.y), instance->rot);
+    v2 x_axis = v2_complex_prod(V2(instance->scale.x * 0.5f, 0.0f), instance->rot);
+    v2 y_axis = v2_complex_prod(V2(0.0f, instance->scale.y * 0.5f), instance->rot);
     
     outline[0].offset = center - x_axis;
     outline[0].scale = V2(thickness, instance->scale.y);
@@ -258,10 +282,10 @@ void Implicit_Context::render_init(Renderer* renderer, Memory_Block* block, u8 c
             u16 handle = os_platform.make_editable_mesh(sizeof(Render_Vertex), 4, CAST(u8 **, &vertex_mapped), CAST(u8 **, &index_mapped));
             ASSERT(handle == Mesh_Uid::quad);
             
-            vertex_mapped[0] = make_render_vertex(V2(0.5f, 0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
-            vertex_mapped[1] = make_render_vertex(V2(-0.5f, 0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
-            vertex_mapped[2] = make_render_vertex(V2(-0.5f, -0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
-            vertex_mapped[3] = make_render_vertex(V2(0.5f, -0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            vertex_mapped[0] = make_render_vertex(V2(0.5f, 0.5f), V2(1.0f, 1.0f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            vertex_mapped[1] = make_render_vertex(V2(-0.5f, 0.5f), V2(0.0f, 1.0f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            vertex_mapped[2] = make_render_vertex(V2(-0.5f, -0.5f), V2(0.0f, 0.0f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            vertex_mapped[3] = make_render_vertex(V2(0.5f, -0.5f), V2(1.0f, 0.0f), V4(1.0f, 1.0f, 1.0f, 1.0f));
             
             index_mapped[0] = 0;
             index_mapped[1] = 1;
@@ -282,10 +306,10 @@ void Implicit_Context::render_init(Renderer* renderer, Memory_Block* block, u8 c
             u16 *index_mapped;
             u16 handle = os_platform.make_editable_mesh(sizeof(Render_Vertex), 4, CAST(u8 **, &vertex_mapped), CAST(u8 **, &index_mapped));
             
-            vertex_mapped[0] = make_render_vertex(V2(0.5f, 0.5f), V4(1.0f, 0.0f, 0.0f, 1.0f));
-            vertex_mapped[1] = make_render_vertex(V2(-0.5f, 0.5f), V4(1.0f, 1.0f, 1.0f, 1.0f));
-            vertex_mapped[2] = make_render_vertex(V2(-0.5f, -0.5f), V4(0.0f, 0.0f, 0.0f, 1.0f));
-            vertex_mapped[3] = make_render_vertex(V2(0.5f, -0.5f), V4(0.0f, 0.0f, 0.0f, 1.0f));
+            vertex_mapped[0] = make_render_vertex(V2(0.5f, 0.5f), V2(1.0f, 1.0f), V4(1.0f, 0.0f, 0.0f, 1.0f));
+            vertex_mapped[1] = make_render_vertex(V2(-0.5f, 0.5f), V2(0.0f, 1.0f), V4(1.0f, 1.0f, 1.0f, 1.0f));
+            vertex_mapped[2] = make_render_vertex(V2(-0.5f, -0.5f), V2(0.0f, 0.0f), V4(0.0f, 0.0f, 0.0f, 1.0f));
+            vertex_mapped[3] = make_render_vertex(V2(0.5f, -0.5f), V2(1.0f, 0.0f), V4(0.0f, 0.0f, 0.0f, 1.0f));
             
             index_mapped[0] = 0;
             index_mapped[1] = 1;
@@ -321,16 +345,16 @@ void Implicit_Context::render_init(Renderer* renderer, Memory_Block* block, u8 c
             {
                 f32 at_y = -0.5f;
                 f32 y_step = 1.0f / (ARRAY_LENGTH(hues) - 1);
-                vertex_mapped[0] = make_render_vertex(V2(-0.5f, at_y), hues[0]);
-                vertex_mapped[1] = make_render_vertex(V2(0.5f, at_y), hues[0]);
+                vertex_mapped[0] = make_render_vertex(V2(-0.5f, at_y), V2(0.0f, (at_y + 0.5f)), hues[0]);
+                vertex_mapped[1] = make_render_vertex(V2(0.5f, at_y), V2(1.0f, (at_y + 0.5f)), hues[0]);
                 
                 u16 running_vertex_index = 2;
                 s32 running_index_index = 0;
                 FORI_NAMED(hue_index, 1, ARRAY_LENGTH(hues)) {
                     at_y += y_step;
                     
-                    vertex_mapped[running_vertex_index + 0] = make_render_vertex(V2(-0.5f, at_y), hues[hue_index]);
-                    vertex_mapped[running_vertex_index + 1] = make_render_vertex(V2(0.5f, at_y), hues[hue_index]);
+                    vertex_mapped[running_vertex_index + 0] = make_render_vertex(V2(-0.5f, at_y), V2(0.0f, (at_y + 0.5f)), hues[hue_index]);
+                    vertex_mapped[running_vertex_index + 1] = make_render_vertex(V2(0.5f, at_y), V2(1.0f, (at_y + 0.5f)), hues[hue_index]);
                     
                     index_mapped[running_index_index + 0] = running_vertex_index - 2;
                     index_mapped[running_index_index + 1] = running_vertex_index - 1;

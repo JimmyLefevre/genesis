@@ -569,6 +569,8 @@ static Game_Interface win_load_game_code(u16 *built_dll_name, u16 *loaded_dll_na
             win_export.os.draw_mesh_instances = draw_mesh_instances;
             win_export.os.make_editable_mesh = make_editable_mesh;
             win_export.os.update_editable_mesh = update_editable_mesh;
+            win_export.os.update_texture_rgba = update_texture_rgba;
+            win_export.os.upload_texture_to_gpu_rgba8 = upload_texture_to_gpu_rgba8;
             
             //
             // @Temporary @Debug

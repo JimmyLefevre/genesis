@@ -2,16 +2,16 @@
 //
 // CURRENT:
 //
-Collision:
-- Broad phase.
+Graphics:
+- Shader Model 5.1 would be nice? 
+- Replace synchronous set_transform, set_shader calls with draw commands.
+- Add Z to Render_Vertex.
+
+Important:
+- Reimplement profiler support.
 
 Map stuff:
 - Add streaming from disk. :SaveGames
-
-Graphics:
-- Add texture support back in.
-- Replace game graphics with meshes.
-- Add Z to Render_Vertex.
 
 Audio:
 - Instruments: Either make our own and have some way to select them for each MIDI track, or embed them into the Synth_Input.

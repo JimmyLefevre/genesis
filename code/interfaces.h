@@ -40,18 +40,48 @@ struct Mesh_Instance {
     v4 color;
 };
 
+ENUM(Draw_Command_Type) {
+    NONE = 0,
+    
+    INSTANCES,
+    TEXTURE,
+    VERTEX_SHADER,
+    PIXEL_SHADER,
+    
+    COUNT,
+};
+
 struct Draw_Command {
-    u16 mesh_handle;
-    s32 instance_count;
+    u8 type;
+    union {
+        struct {
+            u16 mesh_handle;
+            s32 instance_count;
+        };
+        
+        struct {
+            u16 texture_id;
+        };
+        
+        struct {
+            u16 vertex_shader_id;
+        };
+        
+        struct {
+            u16 pixel_shader_id;
+        };
+    };
 };
 
 struct Render_Vertex {
     v2 p;
+    v2 uv;
     v4 color;
 };
-static inline Render_Vertex make_render_vertex(v2 p, v4 color) {
+static inline Render_Vertex make_render_vertex(v2 p, v2 uv, v4 color) {
     Render_Vertex result;
     result.p = p;
+    result.uv = uv;
     result.color = color;
     return result;
 }
@@ -74,6 +104,10 @@ typedef GPU_DRAW_MESH_INSTANCES(gpu_draw_mesh_instances);
 typedef GPU_MAKE_EDITABLE_MESH(gpu_make_editable_mesh);
 #define GPU_UPDATE_EDITABLE_MESH(name) void name(u16 list_handle, u16 editable_handle, s32 index_count, bool make_read_only)
 typedef GPU_UPDATE_EDITABLE_MESH(gpu_update_editable_mesh);
+#define GPU_UPDATE_TEXTURE_RGBA(name) void name(u16 id, u8 *data, v2s dim, v2s bottom_left)
+typedef GPU_UPDATE_TEXTURE_RGBA(gpu_update_texture_rgba);
+#define GPU_UPLOAD_TEXTURE_TO_GPU_RGBA8(name) void name(u16 list_handle, u16 index, u8 *data, v2s dim)
+typedef GPU_UPLOAD_TEXTURE_TO_GPU_RGBA8(gpu_upload_texture_to_gpu_rgba8);
 
 struct os_function_interface {
     os_mem_alloc *mem_alloc;
@@ -99,36 +133,37 @@ struct os_function_interface {
     gpu_draw_mesh_instances *draw_mesh_instances;
     gpu_make_editable_mesh *make_editable_mesh;
     gpu_update_editable_mesh *update_editable_mesh;
+    gpu_update_texture_rgba *update_texture_rgba;
+    gpu_upload_texture_to_gpu_rgba8 *upload_texture_to_gpu_rgba8;
 };
 
-ENUM(Shader_ID) {
+ENUM(Texture_Id) {
+    BLANK = 0,
+    UNTEXTURED,
+    FONT_ATLAS,
+    
+    COUNT,
+};
+
+ENUM(Shader_Id) {
     STANDARD_VERTEX = 0,
     STANDARD_PIXEL,
     
     COUNT,
 };
 
-ENUM(Vertex_Buffer_ID) {
+ENUM(Vertex_Buffer_Id) {
     P_COLOR_INDEX,
     
     COUNT,
 };
 
-ENUM(Constant_Buffer_ID) {
+ENUM(Constant_Buffer_Id) {
     VERTEX_POSITION,
     VERTEX_COLOR,
     
     COUNT,
 };
-
-#if 0 // :RemoveTextures
-ENUM(Texture_ID) {
-    FIRST = 0,
-    SECOND,
-    
-    COUNT,
-};
-#endif
 
 struct OS_Export {
     os_function_interface os;
